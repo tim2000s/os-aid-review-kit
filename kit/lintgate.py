@@ -223,10 +223,14 @@ def main(argv=None):
         new_spec = ""
         old_spec = "HEAD" if has_head else git("hash-object", "-t", "tree", "/dev/null").strip()
     else:
-        new_spec, old_spec = "HEAD", git("merge-base", a.base, "HEAD").strip()
+        new_spec = "HEAD"
+        old_spec = (git("hash-object", "-t", "tree", "/dev/null").strip() if a.base == ":root"
+                    else git("merge-base", a.base, "HEAD").strip())
     wanted = set(a.languages.split(",")) if a.languages else set(LANGUAGES)
     files, skipped = [], []
     for status, path in changed(a.staged, old_spec, new_spec):
+        if path.startswith(".review/"):
+            continue  # the kit's own scripts, linted in the kit's repository under its own rules
         lang = language_of(path)
         if lang in wanted:
             files.append((status, path))

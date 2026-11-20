@@ -9,14 +9,13 @@ pre-commit:
       glob: "*.{kt,kts,swift,py,js,jsx,ts,tsx,mjs,cjs}"
       run: python3 .review/bin/lintgate.py --staged --mode adopt
     3_secret-scan:
-      # records hold generated blob hashes, which TruffleHog's SonarCloud detector reads as tokens
-      exclude:
-        - ".review/records/*"
-      run: trufflehog filesystem --no-update --no-verification --fail --config trufflehog.yml {staged_files}
+      run: >-
+        trufflehog filesystem --no-update --no-verification --fail --config trufflehog.yml
+        --exclude-paths .review/trufflehog-exclude.txt {staged_files}
     4_guardrails:
       glob: "*.{kt,kts,swift,py,js,jsx,ts,tsx,mjs,cjs}"
       exclude:
-        - ".review/records/*"
+        - ".review/records/*.md"
       run: semgrep scan --metrics=off --error --quiet --config .semgrep/ {staged_files}
 
 commit-msg:

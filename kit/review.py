@@ -28,6 +28,7 @@ from that block, so the two cannot disagree.
     review.py pr-body --base REF               markdown summary for a pull request description
     review.py trailers MSGFILE                 commit-msg hook: append the record's trailers
     review.py base                             merge-base with the upstream (or default) branch
+    REF may be :root, meaning everything the tip holds (a repository's first commits).
 """
 import argparse
 import datetime
@@ -47,11 +48,13 @@ DELETED = "deleted"
 ZERO = "0" * 40
 # The gate's own configuration is reviewed at the highest tier, so a change cannot loosen the gate
 # and pass through it in the same commit.
-GATE = [".review/tiers.toml", ".review/bin/*", "lefthook.yml", ".lefthook.yml", ".lefthook/*", ".semgrep/*",
+GATE = [".review/tiers.toml", ".review/bin/*", ".review/trufflehog-exclude.txt", "lefthook.yml", ".lefthook.yml",
+        ".lefthook/*", ".semgrep/*",
         "trufflehog.yml", "trivy.yaml", ".trivyignore", ".github/workflows/*", "biome.json", "biome.jsonc",
         "ruff.toml", ".ruff.toml", "pyproject.toml", ".editorconfig", "detekt.yml", "config/detekt/detekt.yml",
         ".swiftlint.yml", ".pr_agent.toml"]
-EXEMPT = [".review/records/*", ".review/README.md", ".review/.*"]
+EXEMPT = [".review/records/*.md", ".review/records/.gitkeep", ".review/README.md", ".review/.last-checks.json",
+          ".review/.test-output.txt"]
 
 
 def git(*args, check=True):
@@ -95,6 +98,8 @@ def span_of(base=None, tip=None):
     if base is None:
         return ("HEAD" if has_commit() else None), ""
     tip = tip or "HEAD"
+    if base == ":root":  # everything the tip holds, as for a first push
+        return git("hash-object", "-t", "tree", "/dev/null"), git("rev-parse", tip)
     return git("merge-base", base, tip), git("rev-parse", tip)
 
 
@@ -409,11 +414,11 @@ def cmd_check_push(a):
         if remote != ZERO and has_commit(remote):
             base = remote
         else:
-            base = next((r for r in ("origin/HEAD", "origin/main", "origin/master") if has_commit(r)), None)
-        if base is None:
-            print(f"review: no base to measure {parts[0]} from; nothing on the remote to compare with",
-                  file=sys.stderr)
-            return 1
+            # a new branch: measure from the remote's default branch, or from nothing on a first push
+            base = next((r for r in ("origin/HEAD", "origin/main", "origin/master") if has_commit(r)), ":root")
+            if base == ":root":
+                print(f"review: no remote sha or origin default branch for {parts[0]}, so it is measured from "
+                      "the empty tree and every file it holds needs a record", file=sys.stderr)
         missing += [f"{p} (in {parts[0]})" for p in uncovered(span_of(base, local), cfg)]
     return report(missing)
 

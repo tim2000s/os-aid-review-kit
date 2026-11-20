@@ -72,7 +72,7 @@ jobs:
         if: always()
         run: trivy fs --format cyclonedx --output sbom.cdx.json --exit-code 0 .
       - name: TruffleHog (commits in this pull request)
-        run: trufflehog git file://. --since-commit $(git merge-base origin/${{ github.base_ref }} HEAD) --config trufflehog.yml --no-update --fail
+        run: trufflehog git file://. --since-commit $(git merge-base origin/${{ github.base_ref }} HEAD) --config trufflehog.yml --exclude-paths .review/trufflehog-exclude.txt --no-update --fail
       - uses: actions/upload-artifact@v7
         if: always()
         with:

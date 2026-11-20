@@ -356,3 +356,25 @@ def test_pre_push_hook_checks_a_branch_other_than_head(repo, tmp_path):
     out = p.stdout + p.stderr
     assert p.returncode != 0 and "unreviewed: app.py (in refs/heads/evil)" in out, out
     assert "evil" not in sh(repo, "git", "ls-remote", "origin").stdout
+
+
+def test_first_push_measures_from_nothing(repo):
+    # from nothing every finding is new, so the fixture's deliberate unused import has to go first
+    (repo / "app.py").write_text("def f():\n    return 1\n")
+    sh(repo, "git", "commit", "-qam", "clean", "--no-verify")
+    tip = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    line = f"refs/heads/main {tip} refs/heads/main {'0' * 40}\n"
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
+                       capture_output=True, text=True)
+    assert p.returncode == 1 and "unreviewed: app.py" in p.stdout
+    review(repo, "checks", "--base", ":root")
+    (repo / ".review" / "exp.txt").write_text("The repository as first committed.\n")
+    r = review(repo, "record", "--base", ":root", "--author", "a person", "--reviewer", "r, fresh context",
+               "--explanation", ".review/exp.txt", "--way-back", "delete the repository")
+    assert r.returncode == 0, r.stderr
+    sh(repo, "git", "commit", "-qm", "record", "--no-verify")
+    tip = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    line = f"refs/heads/main {tip} refs/heads/main {'0' * 40}\n"
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr

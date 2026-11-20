@@ -103,14 +103,13 @@ pre-commit:
       glob: "*.{{{globs}}}"
       run: python3 .review/bin/lintgate.py --staged --mode {mode}
     3_secret-scan:
-      # records hold generated blob hashes, which TruffleHog's SonarCloud detector reads as tokens
-      exclude:
-        - ".review/records/*"
-      run: trufflehog filesystem --no-update --no-verification --fail --config trufflehog.yml {{staged_files}}
+      run: >-
+        trufflehog filesystem --no-update --no-verification --fail --config trufflehog.yml
+        --exclude-paths .review/trufflehog-exclude.txt {{staged_files}}
     4_guardrails:
       glob: "*.{{{globs}}}"
       exclude:
-        - ".review/records/*"
+        - ".review/records/*.md"
       run: semgrep scan --metrics=off --error --quiet --config .semgrep/ {{staged_files}}
 
 commit-msg:
@@ -315,6 +314,8 @@ def main(argv=None):
     # The review records and their tools
     w.put(".review/tiers.toml", tiers)
     w.copy(".review/README.md", os.path.join(T, "review-README.md"), owned=True)
+    # records hold generated blob hashes, which TruffleHog's SonarCloud detector reads as tokens
+    w.put(".review/trufflehog-exclude.txt", "^\\.review/records/[^/]+\\.md$\n", owned=True)
     w.copy(".review/bin/review.py", os.path.join(KIT, "kit", "review.py"), owned=True)
     w.copy(".review/bin/lintgate.py", os.path.join(KIT, "kit", "lintgate.py"), owned=True)
     if not os.path.exists(os.path.join(root, ".review", "records")):
