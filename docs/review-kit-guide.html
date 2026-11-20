@@ -1,0 +1,131 @@
+<title>OS-AID Review Kit</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,650&display=swap">
+<style>
+/* Layout: a single reading column of guidance, with wide blocks for terminal output and tables. */
+:root {
+  --paper: #f6f7f5;
+  --ink: #1c2422;
+  --muted: #56625e;
+  --rule: #d5dbd8;
+  --panel: #eaeeec;
+  --accent: #1d6b57;
+  --pending: #9a5b00;
+  --term-bg: #1b2321;
+  --term-fg: #dce6e2;
+  --term-dim: #8fa39c;
+  --display: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131917; --ink: #e3ebe8; --muted: #9db0aa; --rule: #2d3935; --panel: #1c2522;
+    --accent: #5fc2a5; --pending: #e0a346; --term-bg: #0c1110; --term-fg: #d6e2de; --term-dim: #7e928b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #131917; --ink: #e3ebe8; --muted: #9db0aa; --rule: #2d3935; --panel: #1c2522;
+  --accent: #5fc2a5; --pending: #e0a346; --term-bg: #0c1110; --term-fg: #d6e2de; --term-dim: #7e928b;
+  color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; }
+.page { max-width: 760px; margin: 0 auto; padding-block: 48px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 8px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 650; font-size: clamp(32px, 6vw, 44px); line-height: 1.1; margin: 10px 0 14px; text-wrap: balance; }
+.lede { font-size: 18px; color: var(--muted); max-width: 62ch; margin: 0; }
+h2 { font-family: var(--display); font-weight: 650; font-size: 24px; line-height: 1.25; margin: 48px 0 12px; text-wrap: balance; }
+h3 { font-size: 16px; font-weight: 600; margin: 28px 0 6px; }
+p, li { max-width: 66ch; }
+ol, ul { padding-left: 1.3em; }
+li { margin: 6px 0; }
+a { color: var(--accent); }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--panel); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.term { background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: 13.5px; line-height: 1.55;
+  border-radius: 8px; padding: 16px 18px; overflow-x: auto; margin: 14px 0 18px; white-space: pre; }
+.term .dim { color: var(--term-dim); }
+.term .ok { color: #7fd6b8; }
+.term .no { color: #f0907c; }
+.term .wait { color: #e8b866; }
+.table-wrap { overflow-x: auto; margin: 14px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 12px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500; }
+td code { white-space: nowrap; }
+.tier { font-family: var(--mono); font-size: 12px; padding: 2px 7px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.tier.high { color: #b03a2e; } .tier.med { color: var(--pending); } .tier.low { color: var(--accent); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tier.high { color: #f0907c; } }
+:root[data-theme="dark"] .tier.high { color: #f0907c; }
+.note { border-left: 3px solid var(--pending); padding: 4px 0 4px 14px; color: var(--ink); margin: 18px 0; }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 40px; margin: 16px 0; }
+.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 26px; height: 26px; border-radius: 50%;
+  border: 1.5px solid var(--accent); color: var(--accent); font-family: var(--mono); font-size: 13px; display: grid; place-items: center; }
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 14px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="page">
+<header>
+  <div class="eyebrow">For people writing open-source AID code with an AI assistant</div>
+  <h1>OS-AID Review Kit</h1>
+  <p class="lede">Checks and a review record that run every time you commit. Code written with Claude, Codex or another model then reaches a maintainer with evidence of what was checked, by what, and in exactly which form.</p>
+</header>
+
+<h2>What it is</h2>
+<p>Open-source automated insulin delivery projects are wary of AI-written contributions. AndroidAPS stopped accepting AI-generated pull requests on 15 June 2026, because reviewing such code took maintainers longer than the model took to write it, and because unverified code is a risk the project will not accept.</p>
+<p>The kit moves the checking to the person writing the code, before anything is pushed, and writes down what was checked. Every reviewed file is recorded with the git hash of the exact content that was reviewed, so a maintainer can tell in seconds whether the code in front of them is the code that was reviewed.</p>
+
+<h2>What it does</h2>
+<p>Take a change your assistant has made to the SMB limit logic in an AndroidAPS fork. That file can change a dose, so the kit treats it as high tier. The tier depends on what a file can affect, never on who or what wrote it. Before the change can be committed:</p>
+<ol class="steps">
+  <li><h3>The checks run on what is staged</h3>
+    <p>Linters, a secret scan, static-analysis rules and the project's tests. The linters fail only on problems the change adds, so you are never asked to fix the years of old findings an established project carries.</p></li>
+  <li><h3>A second model reviews the diff</h3>
+    <p>A fresh session that did not write the change reads the diff against the project's review checklist. Each finding is labelled important (must be fixed), nit or pre-existing, and every important one is fixed.</p></li>
+  <li><h3>The review is recorded</h3>
+    <p>The record lists each file with its hash, the checks and their results, the findings and what was done about each, a plain account of the change, and for high-tier code how to undo it.</p></li>
+  <li><h3>The commit carries the evidence</h3>
+    <p>A commit is refused if any file in it is missing from a record in exactly the form being committed. When it goes through, the message gains lines anyone can read:</p>
+<div class="term">Cap SMB at maxSMBBasalMinutes when the profile switches mid-cycle
+
+Review-Record: 20261120-181722-2337a36
+Review-Tier: high
+Written-By: claude-opus-5-5
+Reviewed-By: claude-opus-5-5, fresh context
+Human-Review: <span class="wait">pending</span></div></li>
+</ol>
+<p>Pushes are checked the same way, branch by branch. A person reviewing later runs <code>review.py status</code> to see what is waiting and whether anything has changed since its review, and <code>review.py signoff</code> to record their verdict. Sign-off is refused if the file differs from the one that was reviewed.</p>
+<p>In practice you do not run these steps by hand. The kit gives your assistant instructions that Claude Code and Codex read at the start of each session, so you ask for the change and the assistant runs the checks, gets the review and writes the record. If it skips a step, the commit is refused with a message saying what is missing.</p>
+
+<h2>Setting it up on your machine</h2>
+<h3>1. Install the tools</h3>
+<p>On a Mac with Homebrew:</p>
+<div class="term"><span class="dim">$</span> brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff</div>
+<p>You need Python 3.11 or newer, and only the tools for the languages you work in: ktlint and detekt for AndroidAPS, SwiftLint and SwiftFormat for Trio, Biome for Nightscout.</p>
+
+<h3>2. Put the kit in your home folder</h3>
+<p>Save the kit folder you were sent as <code>~/os-aid-review-kit</code>.</p>
+
+<h3>3. Switch it on for every repository</h3>
+<div class="term"><span class="dim">$</span> python3 ~/os-aid-review-kit/kit/global.py on</div>
+<p>From then on every commit and push on the machine goes through the gate. Nothing is added to your projects: the records are kept in <code>~/.review-ledger</code>. Any hooks your projects already use keep running. Merging from upstream needs no record for files your fork never changed. <code>global.py off</code> switches it all off again.</p>
+
+<h3>4. Tell your assistant</h3>
+<p>Add this line to the <code>CLAUDE.md</code> or <code>AGENTS.md</code> your assistant reads:</p>
+<div class="term">Before every commit, follow the review steps in ~/os-aid-review-kit/templates/AGENTS-block.md, using python3 ~/os-aid-review-kit/kit/review.py.</div>
+<p>To keep the records inside one particular project instead, so they travel with its pull requests, run <code>python3 ~/os-aid-review-kit/kit/install.py &lt;project folder&gt; --hooks</code> and commit what it adds.</p>
+
+<h2>What it does not prove</h2>
+<ul>
+  <li>A record is an attestation, not a proof: a review is only as good as the reviewer. The kit makes the review visible and checkable; it does not replace a person reading safety-critical code, but it tells that person which files to read and what has already been checked.</li>
+  <li><code>git commit --no-verify</code> skips the hooks. Do not use it. The shared repository's CI and branch protection are what hold in the end.</li>
+</ul>
+<p>The kit has 48 automated tests, has been through six rounds of independent review, and has gated AndroidAPS, Trio and Nightscout work on one developer's machine since 20 November 2026. Its GitHub CI workflow has not yet run on GitHub.</p>
+
+<footer>Questions and problems to Tim Street. 20 November 2026.</footer>
+</div>

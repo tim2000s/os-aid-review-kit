@@ -657,3 +657,15 @@ def test_command_line_upstream_is_ignored(plain, tmp_path):
     env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "review.upstream",
            "GIT_CONFIG_VALUE_0": "refs/remotes/origin/feat"}
     assert ambient(plain, "check", env=env).returncode == 1
+
+
+def test_status_and_signoff_read_a_symlink_as_git_stores_it(repo):
+    (repo / "link.py").symlink_to("app.py")
+    sh(repo, "git", "add", "link.py")
+    review(repo, "checks")
+    rid = os.path.basename(record(repo).stdout.strip())[:-3]
+    assert "changed  link.py" not in review(repo, "status").stdout
+    assert review(repo, "signoff", rid, "--by", "T").returncode == 0
+    (repo / "link.py").unlink()
+    (repo / "link.py").symlink_to("missing.py")  # repointed at nothing after the review
+    assert "changed  link.py" in review(repo, "status").stdout

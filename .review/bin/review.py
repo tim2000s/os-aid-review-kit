@@ -487,6 +487,15 @@ def published(pairs, base, tips):
     return found
 
 
+def on_disk(path):
+    """The blob hash git would store for the file as it is now; for a symlink that is the link
+    itself, not the file it points to, which is what `git hash-object PATH` would read."""
+    if os.path.islink(path):
+        return subprocess.run(["git", "hash-object", "--stdin"], input=os.fsencode(os.readlink(path)),
+                              capture_output=True, check=True).stdout.decode().strip()
+    return git("hash-object", path)
+
+
 def uncovered(span, cfg):
     """Files in the span whose content is in no valid record held at the span's tip, leaving out
     content already published on a remote-tracking branch."""
@@ -582,7 +591,7 @@ def cmd_status(a):
         for f in r["files"]:
             latest[f["path"]] = (f["blob"], r["id"])
     for path, (b, rid) in sorted(latest.items()):
-        if b != DELETED and os.path.exists(path) and git("hash-object", path) != b:
+        if b != DELETED and os.path.lexists(path) and on_disk(path) != b:
             print(f"changed  {path}: differs from the content reviewed in {rid}")
     if not pending:
         print("review: no records await human review")
@@ -592,7 +601,7 @@ def cmd_signoff(a):
     recs = {r["id"]: r for r in load_records()}
     rec = recs.get(a.id) or sys.exit(f"review: no record {a.id}")
     drift = [f["path"] for f in rec["files"]
-             if f["blob"] != DELETED and os.path.exists(f["path"]) and git("hash-object", f["path"]) != f["blob"]]
+             if f["blob"] != DELETED and os.path.lexists(f["path"]) and on_disk(f["path"]) != f["blob"]]
     if drift and not a.force:
         raise SystemExit("review: these files differ from the reviewed content, so a sign-off would not "
                          f"describe what is on disk: {', '.join(drift)} (use --force to sign the record anyway)")
