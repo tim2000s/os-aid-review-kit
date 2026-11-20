@@ -263,8 +263,13 @@ def main(argv=None):
     found = new_findings(before, after, added)
 
     if not a.quiet:
+        # where an existing rule's count rose, every instance is a candidate, so say how many are new
+        before_n = collections.Counter((f["path"], f["tool"], f["rule"]) for f in before)
+        after_n = collections.Counter((f["path"], f["tool"], f["rule"]) for f in after)
         for f in found:
-            print(f"{f['path']}:{f['line']}: [{f['tool']} {f['rule']}] {f['message']}")
+            k = (f["path"], f["tool"], f["rule"])
+            extra = "" if f["path"] in added else f" ({before_n[k]} before, {after_n[k]} after)"
+            print(f"{f['path']}:{f['line']}: [{f['tool']} {f['rule']}] {f['message']}{extra}")
     if a.json:
         with open(a.json, "w") as fh:
             json.dump({"files": paths, "skipped": skipped, "mode": a.mode, "new_findings": found}, fh, indent=1)

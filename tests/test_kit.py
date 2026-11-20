@@ -392,3 +392,12 @@ def test_config_added_in_the_change_lints_the_before_side_too(repo):
     sh(repo, "git", "add", "a.js", "biome.json", "package.json")
     p = lintgate(repo)
     assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_biome_defers_house_style_to_an_existing_eslint(repo):
+    (repo / "package.json").write_text("{}\n")
+    (repo / ".eslintrc.js").write_text("module.exports = {};\n")
+    sh(repo, PY, os.path.join(KIT, "kit", "install.py"), str(repo))
+    rules = json.loads((repo / "biome.json").read_text())["linter"]["rules"]
+    assert rules["style"] == "off" and rules["complexity"] == "off"
+    assert rules["suspicious"]["noExplicitAny"] == "error"  # correctness and security rules stay on

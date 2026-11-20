@@ -272,6 +272,15 @@ def main(argv=None):
         biome = json.load(open(os.path.join(T, "biome.json")))
         if any("prettier" in x for x in au["linters"]):
             biome["formatter"]["enabled"] = False  # the repository's own formatter stays in charge
+        if any("eslint" in x or "prettier" in x for x in au["linters"]):
+            # house style belongs to the repository's own ESLint config: Biome keeps correctness,
+            # suspicious-pattern and security rules, and drops the groups and rules that contradict an
+            # ES5/CommonJS codebase (function expressions, string concatenation, 'use strict', block var)
+            rules = biome["linter"]["rules"]
+            rules["style"] = "off"
+            rules["complexity"] = "off"
+            rules.setdefault("suspicious", {})["noRedundantUseStrict"] = "off"
+            rules.setdefault("correctness", {})["noInnerDeclarations"] = "off"
         w.put("biome.json", json.dumps(biome, indent=2) + "\n")
 
     # Phase 3: hooks
