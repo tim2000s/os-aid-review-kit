@@ -21,4 +21,6 @@ paths = ["*.md", "docs/*", "testing/*"]
 paths = ["*.png", "*.jpg", "*.svg", "*.ico", "*.pdf", "LICENSE*", "package-lock.json", "translations/*"]
 
 [tests]
-unit = "env $(cat tests/ci.test.env | xargs) npx mocha --timeout 10000 --exit tests/*.test.js > .review/.test-output.txt 2>&1; s=$?; tail -3 .review/.test-output.txt; exit $s"
+# upstream's own CI commands; integration needs a MongoDB at the address in tests/ci.test.env
+unit = "npm run --silent test:unit:ci > .review/.test-output.txt 2>&1; s=$?; grep -E 'passing|failing' .review/.test-output.txt | tr '\\n' ' '; exit $s"
+integration = "npm run --silent test:integration:ci > .review/.test-integration.txt 2>&1; s=$?; grep -E 'passing|failing' .review/.test-integration.txt | tr '\\n' ' '; exit $s"

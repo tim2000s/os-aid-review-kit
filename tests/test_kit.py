@@ -378,3 +378,17 @@ def test_first_push_measures_from_nothing(repo):
     p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
                        capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_config_added_in_the_change_lints_the_before_side_too(repo):
+    if shutil.which("biome") is None:
+        pytest.skip("biome not installed")
+    (repo / "a.js").write_text("const unused = 1;\ndebugger;\n")  # inherited findings
+    sh(repo, "git", "add", "a.js")
+    sh(repo, "git", "commit", "-qm", "js", "--no-verify")
+    (repo / "package.json").write_text("{}\n")
+    sh(repo, PY, os.path.join(KIT, "kit", "install.py"), str(repo))  # biome.json arrives now
+    (repo / "a.js").write_text("const unused = 1;\ndebugger;\n// touched\n")
+    sh(repo, "git", "add", "a.js", "biome.json", "package.json")
+    p = lintgate(repo)
+    assert p.returncode == 0, p.stdout + p.stderr

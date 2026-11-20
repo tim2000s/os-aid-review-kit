@@ -36,7 +36,8 @@ EXTENSIONS = {"kotlin": (".kt", ".kts"), "swift": (".swift",), "python": (".py",
 BINARIES = {"kotlin": ["ktlint", "detekt"], "swift": ["swiftlint", "swiftformat"], "python": ["ruff", "mypy"],
             "javascript": ["biome"], "all": ["lefthook", "trufflehog", "semgrep", "trivy", "git"]}
 GITIGNORE = [".env", ".env.*", "*.pem", "google-services.json", "GoogleService-Info.plist",
-             ".review/.last-checks.json", ".review/.test-output.txt", ".detekt.sarif"]
+             ".review/.last-checks.json", ".review/.test-output.txt", ".review/.test-integration.txt",
+             ".detekt.sarif"]
 
 
 def audit(root):

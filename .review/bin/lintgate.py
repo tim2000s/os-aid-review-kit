@@ -151,11 +151,12 @@ def show(spec, path):
 
 def materialise(root, spec, paths, fallback=None):
     """Write the files, and the linter configuration, as git holds them at spec ('' = the index). A
-    configuration file the change deletes is taken from `fallback`, so deleting it cannot switch the
-    linter off for the change that deletes it."""
+    configuration file missing at spec is taken from `fallback` (the other side of the change), so
+    deleting a configuration cannot switch its linter off for that change, and adding one lints the
+    code before the change the same way, rather than counting every inherited finding as new."""
     for path in [*CONFIG_FILES, *paths]:
         content = show(spec, path)
-        if content is None and fallback and path in CONFIG_FILES:
+        if content is None and fallback is not None and path in CONFIG_FILES:
             content = show(fallback, path)
         if content is None:
             if path in paths:
@@ -254,7 +255,7 @@ def main(argv=None):
         with tempfile.TemporaryDirectory() as after_root, tempfile.TemporaryDirectory() as before_root:
             materialise(after_root, new_spec, paths, fallback=old_spec)
             after = lint_tree(after_root, paths)
-            materialise(before_root, old_spec, olds)
+            materialise(before_root, old_spec, olds, fallback=new_spec)
             before = lint_tree(before_root, olds)
     except LinterFailed as e:
         print(f"lintgate: {e}", file=sys.stderr)

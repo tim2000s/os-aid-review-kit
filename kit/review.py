@@ -54,7 +54,7 @@ GATE = [".review/tiers.toml", ".review/bin/*", ".review/trufflehog-exclude.txt",
         "ruff.toml", ".ruff.toml", "pyproject.toml", ".editorconfig", "detekt.yml", "config/detekt/detekt.yml",
         ".swiftlint.yml", ".pr_agent.toml"]
 EXEMPT = [".review/records/*.md", ".review/records/.gitkeep", ".review/README.md", ".review/.last-checks.json",
-          ".review/.test-output.txt"]
+          ".review/.test-output.txt", ".review/.test-integration.txt"]
 
 
 def git(*args, check=True):
