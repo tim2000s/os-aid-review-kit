@@ -32,6 +32,8 @@ import tomllib
 CONFIG_FILES = ["pyproject.toml", "ruff.toml", ".ruff.toml", "biome.json", "biome.jsonc",
                 "detekt.yml", "config/detekt/detekt.yml", ".editorconfig", ".swiftlint.yml", ".gitignore"]
 DETEKT_CONFIGS = ("detekt.yml", "config/detekt/detekt.yml")
+# linters that are skipped without a config; ambient mode supplies the kit's
+FALLBACK_CONFIGS = ("biome.json", "detekt.yml", ".swiftlint.yml")
 
 
 class LinterFailed(Exception):
@@ -158,6 +160,11 @@ def materialise(root, spec, paths, fallback=None):
         content = show(spec, path)
         if content is None and fallback is not None and path in CONFIG_FILES:
             content = show(fallback, path)
+        if content is None and path in FALLBACK_CONFIGS and os.environ.get("REVIEW_CONFIG_FALLBACK"):
+            # ambient mode: a repository with no config for this linter is linted with the kit's own
+            # shortcut: no ESLint tailoring here, so new JS files in an ES5 repo meet Biome's style rules
+            src = os.path.join(os.environ["REVIEW_CONFIG_FALLBACK"], path)
+            content = open(src, "rb").read() if os.path.exists(src) else None
         if content is None:
             if path in paths:
                 raise SystemExit(f"lintgate: {path} is not in {spec or 'the index'}")
@@ -231,8 +238,9 @@ def main(argv=None):
                     else git("merge-base", a.base, "HEAD").strip())
     wanted = set(a.languages.split(",")) if a.languages else set(LANGUAGES)
     exempt = []
-    if os.path.exists(".review/tiers.toml"):
-        with open(".review/tiers.toml", "rb") as fh:
+    tiers = os.environ.get("REVIEW_TIERS") or ".review/tiers.toml"
+    if os.path.exists(tiers):
+        with open(tiers, "rb") as fh:
             exempt = tomllib.load(fh).get("exempt", {}).get("paths", [])
     files, skipped = [], []
     for status, path in changed(a.staged, old_spec, new_spec):

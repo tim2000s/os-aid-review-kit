@@ -351,6 +351,10 @@ def main(argv=None):
                           "then run lefthook install")
         elif other:
             hooks_note = f"not installed: the repository already uses {', '.join(other)}; merge lefthook.yml by hand"
+        elif subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True,
+                            text=True).stdout.strip() == os.path.join(KIT, "global-hooks"):
+            # lefthook refuses a global hooks path; the kit's dispatcher runs lefthook itself
+            hooks_note = "covered by the kit's global hooks (kit/global.py on)"
         elif shutil.which("lefthook"):
             p = subprocess.run(["lefthook", "install"], cwd=root, capture_output=True, text=True)
             hooks_note = "installed" if p.returncode == 0 else f"lefthook install failed: {p.stderr.strip()}"

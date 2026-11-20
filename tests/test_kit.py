@@ -18,6 +18,15 @@ def sh(cwd, *cmd, check=True, env=None):
     return p
 
 
+@pytest.fixture(autouse=True)
+def isolated(tmp_path, monkeypatch):
+    """Keep the machine's global git config (which may point at the kit's global hooks) and its review
+    ledger out of every test."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("REVIEW_LEDGER", str(tmp_path / "ledger"))
+    (tmp_path / "gitconfig").write_text("[user]\n\temail = t@example.org\n\tname = T\n")
+
+
 @pytest.fixture
 def repo(tmp_path):
     r = tmp_path / "repo"
@@ -401,3 +410,250 @@ def test_biome_defers_house_style_to_an_existing_eslint(repo):
     rules = json.loads((repo / "biome.json").read_text())["linter"]["rules"]
     assert rules["style"] == "off" and rules["complexity"] == "off"
     assert rules["suspicious"]["noExplicitAny"] == "error"  # correctness and security rules stay on
+
+
+# Ambient mode: a repository without the kit, gated through the global hooks.
+
+@pytest.fixture
+def plain(tmp_path):
+    r = tmp_path / "plain"
+    r.mkdir()
+    sh(r, "git", "init", "-q", "-b", "main")
+    (r / "app.py").write_text("import os\n\n\ndef f():\n    return 1\n")
+    (r / "notes.md").write_text("notes\n")
+    sh(r, "git", "add", ".")
+    sh(r, "git", "commit", "-qm", "base")
+    sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))
+    return r
+
+
+def ambient(r, *args, env=None, stdin=None):
+    p = subprocess.run([PY, os.path.join(KIT, "kit", "review.py"), *args], cwd=r, capture_output=True, text=True,
+                       input=stdin, env={**os.environ, **(env or {})})
+    return p
+
+
+def ambient_record(r, tmp_path):
+    (tmp_path / "exp.txt").write_text("Changes f to return 2.\n")
+    return ambient(r, "record", "--author", "claude-opus-5-5", "--reviewer", "claude-opus-5-5, fresh context",
+                   "--explanation", str(tmp_path / "exp.txt"))
+
+
+def test_ambient_gate_refuses_then_records_outside_the_tree(plain, tmp_path):
+    stage_change(plain)
+    blocked = sh(plain, "git", "commit", "-qm", "change", check=False)
+    assert blocked.returncode != 0 and "unreviewed: app.py" in blocked.stdout + blocked.stderr
+    ambient(plain, "checks")
+    p = ambient_record(plain, tmp_path)
+    assert p.returncode == 0, p.stderr
+    assert str(tmp_path / "ledger") in p.stdout and not (plain / ".review").exists()
+    sh(plain, "git", "commit", "-qm", "change")
+    msg = sh(plain, "git", "log", "-1", "--format=%B").stdout
+    assert "Review-Record:" in msg and "Human-Review: pending" in msg and "Review-Ledger:" in msg, msg
+    assert "pending" in sh(tmp_path / "ledger", "git", "log", "--format=%s").stdout
+    listing = ambient(tmp_path, "status", "--all")
+    assert listing.returncode == 0 and str(plain) in listing.stdout and "1 record(s)" in listing.stdout
+
+
+def test_ambient_secret_scan_runs_at_commit(plain):
+    if shutil.which("trufflehog") is None:
+        pytest.skip("trufflehog not installed")
+    sh(plain, "git", "config", "review.ambient", "true")
+    (plain / "conf.txt").write_text("token=demo1234-" + "0123456789abcdef\n")  # split so this file holds no token
+    sh(plain, "git", "add", "conf.txt")
+    p = sh(plain, "git", "commit", "-qm", "c", check=False, env={"REVIEW_SKIP": "test"})
+    assert p.returncode != 0 and "Nightscout" in p.stdout + p.stderr
+
+
+def test_global_hooks_run_the_repositorys_own_hook_and_honour_opt_out(plain):
+    own = plain / ".git" / "hooks" / "pre-commit"
+    own.write_text("#!/bin/sh\necho own-hook-ran; exit 1\n")
+    own.chmod(0o755)
+    sh(plain, "git", "config", "review.ambient", "false")
+    stage_change(plain)
+    p = sh(plain, "git", "commit", "-qm", "c", check=False)
+    assert p.returncode != 0 and "own-hook-ran" in p.stdout + p.stderr
+    own.unlink()
+    assert sh(plain, "git", "commit", "-qm", "c", check=False).returncode == 0  # opted out of review
+
+
+def test_content_already_upstream_needs_no_record(plain, tmp_path):
+    up = tmp_path / "up"
+    sh(tmp_path, "git", "clone", "-q", str(plain), str(up))
+    (up / "app.py").write_text("def f():\n    return 5\n")
+    sh(up, "git", "rm", "-q", "notes.md")
+    sh(up, "git", "commit", "-qam", "upstream work", "--no-verify")
+    sh(plain, "git", "remote", "add", "upstream", str(up))
+    sh(plain, "git", "fetch", "-q", "upstream")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "upstream/main")
+    assert ambient(plain, "check").returncode == 0, "upstream's own changes must not need a record"
+    (plain / "mine.py").write_text("x = 1\n")
+    sh(plain, "git", "add", "mine.py")
+    p = ambient(plain, "check")
+    assert p.returncode == 1 and "unreviewed: mine.py" in p.stdout and "app.py" not in p.stdout
+
+
+@pytest.mark.skipif(shutil.which("biome") is None, reason="biome not installed")
+def test_ambient_lints_with_the_kits_config_where_the_repo_has_none(plain):
+    (plain / "new.js").write_text("const unused = 1;\ndebugger;\n")
+    sh(plain, "git", "add", "new.js")
+    p = ambient(plain, "checks")
+    assert "fail     lint (new findings)" in p.stdout, p.stdout
+
+
+@pytest.mark.skipif(not (shutil.which("semgrep") and shutil.which("trufflehog")), reason="scanners not installed")
+def test_checks_skip_symlinks(repo):
+    (repo / "link.py").symlink_to("app.py")
+    sh(repo, "git", "add", "link.py")
+    p = review(repo, "checks")
+    assert "fail     semgrep" not in p.stdout and "fail     secrets" not in p.stdout, p.stdout
+
+
+def test_own_pushed_branch_is_not_upstream(plain, tmp_path):
+    remote = tmp_path / "remote.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", str(remote))
+    sh(plain, "git", "remote", "add", "origin", str(remote))
+    sh(plain, "git", "push", "-q", "--no-verify", "origin", "main")
+    sh(plain, "git", "remote", "set-head", "origin", "main")
+    sh(plain, "git", "checkout", "-qb", "feat")
+    stage_change(plain)
+    sh(plain, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    sh(plain, "git", "push", "-q", "--no-verify", "origin", "feat")
+    sh(plain, "git", "checkout", "-q", "main")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "feat")
+    assert ambient(plain, "check").returncode == 1, "a branch the developer pushed is not upstream"
+
+
+def test_old_upstream_content_does_not_excuse_a_revert_or_deletion(plain, tmp_path):
+    old = sh(plain, "git", "rev-parse", "HEAD").stdout.strip()
+    up = tmp_path / "up"
+    sh(tmp_path, "git", "clone", "-q", str(plain), str(up))
+    sh(plain, "git", "remote", "add", "upstream", str(up))
+    sh(plain, "git", "fetch", "-q", "upstream")
+    (plain / "app.py").write_text("def f():\n    return 2\n")  # a fix, after upstream's last commit
+    (plain / "later.py").write_text("x = 1\n")
+    sh(plain, "git", "add", ".")
+    sh(plain, "git", "commit", "-qm", "fix", "--no-verify")
+    fix = sh(plain, "git", "rev-parse", "HEAD").stdout.strip()
+    sh(plain, "git", "checkout", "-q", old, "--", "app.py")  # back to upstream's old content
+    sh(plain, "git", "commit", "-qm", "revert", "--no-verify")
+    p = ambient(plain, "check", "--base", fix)
+    assert p.returncode == 1 and "app.py" in p.stdout, "a revert to old upstream content is new work"
+    # upstream moves on without ever having later.py; deleting it in the merge is the fork's own act
+    (up / "other.txt").write_text("u\n")
+    sh(up, "git", "add", ".")
+    sh(up, "git", "commit", "-qm", "upstream", "--no-verify")
+    sh(plain, "git", "fetch", "-q", "upstream")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "upstream/main")
+    sh(plain, "git", "rm", "-q", "later.py")
+    p = ambient(plain, "check")
+    assert p.returncode == 1 and "later.py" in p.stdout and "other.txt" not in p.stdout, p.stdout
+
+
+def test_kit_repo_with_another_hook_framework_still_runs_the_gate(repo, tmp_path):
+    if shutil.which("lefthook") is None:
+        pytest.skip("lefthook not installed")
+    sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))
+    own = repo / ".git" / "hooks" / "pre-commit"
+    own.write_text("#!/bin/sh\nexit 0\n")  # as the pre-commit framework would leave it
+    own.chmod(0o755)
+    stage_change(repo)
+    p = sh(repo, "git", "commit", "-qm", "c", check=False)
+    assert p.returncode != 0 and "unreviewed: app.py" in p.stdout + p.stderr
+
+
+def test_other_hooks_and_push_input_reach_the_repositorys_own_hooks(plain, tmp_path):
+    hooks = plain / ".git" / "hooks"
+    (hooks / "post-checkout").write_text("#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/checkout-ran\"\n")
+    (hooks / "pre-push").write_text("#!/bin/sh\ncat > \"$(git rev-parse --git-dir)/push-input\"\n")
+    for h in ("post-checkout", "pre-push"):
+        (hooks / h).chmod(0o755)
+    sh(plain, "git", "checkout", "-qb", "other")
+    assert (plain / ".git" / "checkout-ran").exists()
+    remote = tmp_path / "remote.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", str(remote))
+    sh(plain, "git", "remote", "add", "origin", str(remote))
+    sh(plain, "git", "config", "review.ambient", "false")
+    sh(plain, "git", "push", "-q", "origin", "other")
+    assert "refs/heads/other" in (plain / ".git" / "push-input").read_text()
+
+
+def test_command_line_opt_out_does_not_switch_the_gate_off(plain):
+    stage_change(plain)
+    p = sh(plain, "git", "-c", "review.ambient=false", "commit", "-qm", "c", check=False)
+    assert p.returncode != 0 and "unreviewed: app.py" in p.stdout + p.stderr
+
+
+def test_merge_that_drops_the_forks_own_change_needs_a_record(plain, tmp_path):
+    up = tmp_path / "up"
+    sh(tmp_path, "git", "clone", "-q", str(plain), str(up))
+    (plain / "app.py").write_text("def f():\n    return 3  # fork safety fix\n")
+    sh(plain, "git", "commit", "-qam", "fork fix", "--no-verify")
+    (up / "other.txt").write_text("u\n")
+    sh(up, "git", "add", ".")
+    sh(up, "git", "commit", "-qm", "upstream", "--no-verify")
+    sh(plain, "git", "remote", "add", "upstream", str(up))
+    sh(plain, "git", "fetch", "-q", "upstream")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "upstream/main")
+    sh(plain, "git", "checkout", "-q", "upstream/main", "--", "app.py")  # as `-X theirs` would
+    sh(plain, "git", "rm", "-q", "notes.md")  # upstream kept it; the fork drops it in the merge
+    p = ambient(plain, "check")
+    assert p.returncode == 1 and "app.py" in p.stdout and "notes.md" in p.stdout, p.stdout
+    assert "other.txt" not in p.stdout
+
+
+def test_kit_repo_whose_lefthook_config_does_not_run_the_kit_is_refused(repo, tmp_path):
+    sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))
+    (repo / "lefthook.yml").write_text("pre-commit:\n  commands:\n    own:\n      run: 'true'\n")
+    own = repo / ".git" / "hooks" / "pre-commit"
+    own.write_text("#!/bin/sh\n# lefthook\nexit 0\n")
+    own.chmod(0o755)
+    stage_change(repo)
+    p = sh(repo, "git", "commit", "-qm", "c", check=False)
+    assert p.returncode != 0 and "kit-proposed" in p.stdout + p.stderr
+
+
+def test_origin_is_not_upstream_unless_named(plain, tmp_path):
+    remote = tmp_path / "remote.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", "-b", "main", str(remote))
+    sh(plain, "git", "remote", "add", "origin", str(remote))
+    sh(plain, "git", "push", "-q", "--no-verify", "origin", "main")
+    other = tmp_path / "other"
+    sh(tmp_path, "git", "clone", "-q", str(remote), str(other))
+    (other / "app.py").write_text("def f():\n    return 7\n")  # reached origin outside the gate
+    sh(other, "git", "commit", "-qam", "web edit", "--no-verify")
+    sh(other, "git", "push", "-q", "--no-verify", "origin", "main")
+    sh(plain, "git", "fetch", "-q", "origin")
+    sh(plain, "git", "remote", "set-head", "origin", "main")
+    (plain / "notes.md").write_text("local\n")
+    sh(plain, "git", "commit", "-qam", "local", "--no-verify")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "origin/main")
+    assert "app.py" in ambient(plain, "check").stdout
+    sh(plain, "git", "config", "review.upstream", "refs/remotes/origin/main")
+    assert "app.py" not in ambient(plain, "check").stdout
+
+
+def test_upstream_setting_cannot_name_a_local_branch_or_come_from_the_command_line(plain):
+    stage_change(plain)
+    sh(plain, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    sh(plain, "git", "config", "review.upstream", "refs/heads/main")
+    assert ambient(plain, "check", "--base", "HEAD~1").returncode == 1
+    sh(plain, "git", "config", "--unset", "review.upstream")
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "review.upstream", "GIT_CONFIG_VALUE_0": "HEAD"}
+    assert ambient(plain, "check", "--base", "HEAD~1", env=env).returncode == 1
+
+
+def test_command_line_upstream_is_ignored(plain, tmp_path):
+    remote = tmp_path / "remote.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", "-b", "main", str(remote))
+    sh(plain, "git", "remote", "add", "origin", str(remote))
+    sh(plain, "git", "push", "-q", "--no-verify", "origin", "main")
+    sh(plain, "git", "checkout", "-qb", "feat")
+    stage_change(plain)
+    sh(plain, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    sh(plain, "git", "push", "-q", "--no-verify", "origin", "feat")
+    sh(plain, "git", "checkout", "-q", "main")
+    sh(plain, "git", "merge", "-q", "--no-commit", "--no-ff", "feat")
+    env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "review.upstream",
+           "GIT_CONFIG_VALUE_0": "refs/remotes/origin/feat"}
+    assert ambient(plain, "check", env=env).returncode == 1

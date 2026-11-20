@@ -32,6 +32,45 @@ It never overwrites a file. Where one exists and differs, the kit's version is w
 `<name>.kit-proposed`. The kit's own scripts in `.review/bin/` and the marked block in `AGENTS.md`
 are the exceptions, and are refreshed on each run.
 
+## Every repository on a machine
+
+`python3 kit/global.py on` points git's global `core.hooksPath` at `global-hooks/`, so the gate runs
+in every repository on the machine without anything being added to them. The dispatcher there runs a
+repository's own hook first (a lefthook or pre-commit install in `.git/hooks`, which git stops
+running once a global hooks path is set), then the gate:
+
+| Repository | What runs | Where records live |
+|---|---|---|
+| Kit committed (`.review/bin/review.py`) | its own lefthook configuration | `.review/records/`, committed with the code |
+| Anything else | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/<path>/records/` |
+| Opted out (`git config review.ambient false`) | the repository's own hooks only | none |
+
+Ambient mode exists for forks of other people's projects, where a `.review/` directory would travel
+into every pull request, and for the many small repositories that would otherwise each need an
+install. In ambient mode, run `python3 ~/os-aid-review-kit/kit/review.py` in place of
+`.review/bin/review.py`. The first time it runs in a repository, it copies the matching tier preset to
+`tiers.toml` in that repository's ledger directory, to be edited there. Linters without a configuration
+in the repository use the kit's templates. Each record also notes the checkout path and the origin. The
+ledger is a git repository of its own, committed on every record and sign-off; it has no remote until
+one is added. `review.py status --all` lists every pending ambient record on the machine, and commits
+carry a `Review-Ledger` trailer naming the directory.
+
+Both modes leave out content that came from upstream through a merge, so syncing a fork does not
+demand a record for code the change did not write. Upstream is `git config review.upstream <ref>`
+(repeatable) where set, else the default branch of each remote other than `origin`; the
+developer's own pushed branches never count, and nor does origin unless named, since in a repository
+that is not a fork origin is the developer's own. For each upstream branch the gate takes the point
+the tip has merged from it and ignores that point when the base already contained it, so old
+upstream content cannot excuse a revert. A path is left out only when the fork never changed it
+(the same at the base as where fork and upstream diverged) and the tip now matches upstream, so
+taking upstream's side overrides none of the fork's own work. A plain commit is never exempt, and a
+file a merge produces that matches neither side still needs a record.
+
+The memory repositories, which commit on a timer, are opted out. A repository that sets its own
+`core.hooksPath` (husky does) overrides the global one and is not covered; `global.py on --scan DIR`
+lists any. lefthook refuses to install under a global hooks path, so `install.py --hooks` reports
+the repository as covered by the dispatcher, which runs `lefthook run` itself.
+
 ## How the gate treats existing code
 
 An established repository carries findings from before any of these tools ran on it. Linting a
@@ -68,9 +107,8 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (28
-tests, twelve of them written from two rounds of fresh-context review on 20 November 2026; each of
-those failed against the version it was written for). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (47
+tests; each was run against a deliberately broken version of the code it covers and failed there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together. Each test was
 checked against a deliberately broken implementation and fails on it.
 
@@ -103,5 +141,16 @@ and `uv tool install --python 3.12 codegraphcontext==0.6.13` for the code graph.
   --keep-index --include-untracked` clears it for the run.
 - The pre-push Semgrep scan measures from HEAD, not from each pushed ref; the review-coverage check
   before it does handle each ref.
+- Ambient records live only on this machine until the ledger is given a remote, and the coverage
+  check reads whatever the ledger holds, so a record there is not tied to the commit the way a
+  committed one is. The commit trailers are the part that travels.
+- The upstream exemption trusts the default branch of every remote other than origin. A remote that
+  points at the developer's own second fork should be left out by naming the real upstream in
+  `review.upstream`. An octopus merge is checked against its first parent only.
+- With a global hooks path git runs no hooks from `.git/hooks`. The dispatcher is linked under every
+  hook name and runs the repository's own hook first, but `reference-transaction` is
+  not linked, and `git lfs install` cannot write its hooks into the kit's directory; a repository
+  using LFS sets its own `core.hooksPath` and is then outside the gate.
+- A clean `git merge` runs `pre-merge-commit`, not `pre-commit`, so merges are gated at push only.
 - The records live in the repository. A pull request to an upstream that does not want `.review/`
   carries the `pr-body` summary in its description instead.
