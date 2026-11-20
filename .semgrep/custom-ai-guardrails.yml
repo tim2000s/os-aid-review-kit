@@ -1,0 +1,101 @@
+# Patterns that generated code produces more often than people do, plus two specific to AID code.
+# Each rule has examples that must and must not match in the kit's tests/semgrep_targets/.
+rules:
+  - id: insecure-http-url
+    languages: [regex]
+    severity: ERROR
+    message: Plain-http URL. Health data and API secrets travel over this; use https, or a local address.
+    pattern-regex: '["''`]http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|\[::1\])[^"''`\s]+["''`]'
+    paths:
+      include: ["*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.kt", "*.kts", "*.swift"]
+
+  - id: hardcoded-https-url
+    languages: [regex]
+    severity: WARNING
+    message: Hard-coded URL. Endpoints belong in configuration or the existing constants, so a user's own server is not bypassed.
+    pattern-regex: '["''`]https://(?!github\.com|developer\.android\.com|docs\.|.*\.readthedocs\.io)[a-zA-Z0-9.-]+\.[a-z]{2,}[^"''`\s]*["''`]'
+    paths:
+      include: ["*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.kt", "*.kts", "*.swift"]
+      exclude: ["*test*", "*Test*", "*spec*"]
+
+  - id: hardcoded-ip-address
+    languages: [regex]
+    severity: WARNING
+    message: Hard-coded IP address. Use configuration; a literal address works on one network only.
+    pattern-regex: '["''`](?!127\.0\.0\.1|0\.0\.0\.0)(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?["''`]'
+    paths:
+      include: ["*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.kt", "*.kts", "*.swift"]
+      exclude: ["*test*", "*Test*", "*spec*"]
+
+  - id: sql-string-interpolation-python
+    languages: [python]
+    severity: ERROR
+    message: SQL built by string formatting. Pass parameters to execute() instead.
+    pattern-either:
+      - pattern: $C.execute(f"...", ...)
+      - pattern: $C.execute("..." % $X, ...)
+      - pattern: $C.execute("..." + $X, ...)
+      - pattern: $C.execute("...".format(...), ...)
+
+  - id: sql-string-interpolation-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL built by template string. Use placeholders and a parameter array.
+    pattern-either:
+      - pattern: $DB.query(`...${$X}...`, ...)
+      - pattern: $DB.execute(`...${$X}...`, ...)
+      - pattern: $DB.query("..." + $X, ...)
+
+  - id: sql-string-interpolation-kotlin-swift
+    languages: [regex]
+    severity: ERROR
+    message: SQL built by string interpolation. Use bind arguments (selectionArgs, sqlite3_bind_*) or Room parameters.
+    pattern-regex: '(rawQuery|execSQL|sqlite3_exec|sqlite3_prepare_v2)\([^)]*"[^"]*(\$\{?[A-Za-z_]|\\\(|"\s*\+)'
+    paths:
+      include: ["*.kt", "*.kts", "*.swift"]
+
+  - id: empty-catch-python
+    languages: [python]
+    severity: ERROR
+    message: Exception swallowed. In dosing code a silent failure looks like success; log it or let it propagate.
+    pattern-either:
+      - pattern: |
+          try:
+              ...
+          except $E:
+              pass
+      - pattern: |
+          try:
+              ...
+          except:
+              pass
+
+  - id: empty-catch-braces
+    languages: [regex]
+    severity: ERROR
+    message: Empty catch block. In dosing code a silent failure looks like success; log it or let it propagate.
+    pattern-regex: 'catch\s*(\([^)]*\))?\s*\{\s*\}'
+    paths:
+      include: ["*.js", "*.jsx", "*.ts", "*.tsx", "*.kt", "*.kts", "*.swift"]
+
+  - id: unfinished-stub
+    languages: [regex]
+    severity: ERROR
+    message: Unfinished stub left in code. It compiles and fails at run time.
+    pattern-regex: '(\bTODO\(\s*("[^"]*")?\s*\)|fatalError\("[Nn]ot (yet )?implemented)'
+    paths:
+      include: ["*.kt", "*.kts", "*.swift"]
+
+  - id: nightscout-secret-literal
+    languages: [regex]
+    severity: ERROR
+    message: Nightscout API secret or access token in source. Read it from configuration; never commit one.
+    pattern-regex: '((?i:api_?secret)\s*[=:]\s*["''`][^"''`\s]{12,}["''`]|token=[a-z0-9]{3,}-[0-9a-f]{16}\b)'
+
+  - id: inline-mmol-conversion
+    languages: [regex]
+    severity: WARNING
+    message: Inline mmol/L to mg/dL factor. Use the repository's own constant so every conversion agrees.
+    pattern-regex: '([*/]\s*18(\.0(18?)?)?\b(?!\.\d)|\b18\.0(18?)?\s*[*/])'
+    paths:
+      include: ["*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.kt", "*.kts", "*.swift"]

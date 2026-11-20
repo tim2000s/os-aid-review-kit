@@ -15,37 +15,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-# kit:lang=python
       - name: Ruff and mypy
         run: |
           pip install ruff==0.17.3 mypy==2.4.1
           git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD -- '*.py' > py.txt
           if [ -s py.txt ]; then mypy $(cat py.txt) || echo "::warning::mypy reported type errors (advisory)"; fi
-# kit:end
-# kit:lang=javascript
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - run: npm install -g @biomejs/biome@2.6.8
-# kit:end
-# kit:lang=kotlin
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
       - name: ktlint and detekt
         run: |
-          curl -sSLf -o /usr/local/bin/ktlint https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
-          chmod +x /usr/local/bin/ktlint
+          sudo curl -sSLf -o /usr/local/bin/ktlint https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
+          sudo chmod +x /usr/local/bin/ktlint
           curl -sSLf -o detekt.zip https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8.zip
-          unzip -q detekt.zip -d /opt && ln -s /opt/detekt-cli-1.23.8/bin/detekt-cli /usr/local/bin/detekt
-# kit:end
+          sudo unzip -q detekt.zip -d /opt && sudo ln -s /opt/detekt-cli-1.23.8/bin/detekt-cli /usr/local/bin/detekt
       - name: New findings only
-        run: python3 .review/bin/lintgate.py --base origin/${{ github.base_ref }} --json lint.json
+        run: python3 .review/bin/lintgate.py --base origin/${{ github.base_ref }} --languages __KIT_LANGS_LINUX__ --json lint.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -59,10 +54,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - run: brew install swiftlint
       - name: New findings only
-        run: python3 .review/bin/lintgate.py --base origin/${{ github.base_ref }}
+        run: python3 .review/bin/lintgate.py --base origin/${{ github.base_ref }} --languages swift
 # kit:end
 
   security:
@@ -70,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
@@ -77,8 +74,8 @@ jobs:
       - name: Install scanners
         run: |
           pip install semgrep==1.186.0
-          curl -sSLf https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz | tar -xz -C /usr/local/bin trivy
-          curl -sSLf https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_linux_amd64.tar.gz | tar -xz -C /usr/local/bin trufflehog
+          curl -sSLf https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz | sudo tar -xz -C /usr/local/bin trivy
+          curl -sSLf https://github.com/trufflesecurity/trufflehog/releases/download/v3.100.0/trufflehog_3.100.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin trufflehog
       - name: Semgrep (new findings against the base branch)
         run: semgrep scan --metrics=off --config auto --config .semgrep/ --error --baseline-commit $(git merge-base origin/${{ github.base_ref }} HEAD)
       - name: Trivy (HIGH and CRITICAL in lockfiles)
@@ -102,9 +99,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - run: python3 .review/bin/review.py pr-body --base origin/${{ github.base_ref }} >> "$GITHUB_STEP_SUMMARY"
-      - run: python3 .review/bin/review.py check --base origin/${{ github.base_ref }}
+      - name: Use the base branch's copy of the gate
+        # a pull request must not be able to loosen the rules it is checked against
+        run: |
+          base=origin/${{ github.base_ref }}
+          mkdir -p "$RUNNER_TEMP/kit"
+          if git cat-file -e "$base:.review/bin/review.py" 2>/dev/null; then
+            git show "$base:.review/bin/review.py" > "$RUNNER_TEMP/kit/review.py"
+            git show "$base:.review/tiers.toml" > "$RUNNER_TEMP/kit/tiers.toml"
+          else
+            cp .review/bin/review.py .review/tiers.toml "$RUNNER_TEMP/kit/"
+            echo "::warning::The base branch has no review kit yet, so this pull request is checked with its own copy."
+          fi
+      - run: REVIEW_TIERS="$RUNNER_TEMP/kit/tiers.toml" python3 "$RUNNER_TEMP/kit/review.py" pr-body --base origin/${{ github.base_ref }} >> "$GITHUB_STEP_SUMMARY"
+      - run: REVIEW_TIERS="$RUNNER_TEMP/kit/tiers.toml" python3 "$RUNNER_TEMP/kit/review.py" check --base origin/${{ github.base_ref }}
 
   pr-agent:
     # Advisory only. Secrets are not passed to workflows from forks, so on a fork's pull request
@@ -138,6 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: SonarSource/sonarqube-scan-action@v8
         env:

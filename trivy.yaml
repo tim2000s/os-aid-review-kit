@@ -1,0 +1,7 @@
+# Lockfiles are what gets scanned; a manifest without a lockfile has no fixed versions to check.
+scan:
+  scanners: [vuln, secret, misconfig]
+  skip-dirs: [node_modules, build, .gradle, Pods, .build, DerivedData]
+severity: [HIGH, CRITICAL]
+exit-code: 1
+ignorefile: .trivyignore

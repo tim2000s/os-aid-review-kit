@@ -196,7 +196,9 @@ def test_install_never_overwrites(repo):
 
 def test_install_tailors_languages(repo):
     wf = (repo / ".github" / "workflows" / "quality-gate.yml").read_text()
-    assert "ruff==" in wf and "ktlint" not in wf and "swiftlint" not in wf and "biome" not in wf
+    # CI installs every non-Swift toolchain, so a file in an undetected language is linted, not skipped
+    assert "ruff==" in wf and "ktlint" in wf and "biome" in wf and "macos" not in wf
+    assert "--languages python,javascript,kotlin,swift" in wf
     assert not (repo / "detekt.yml").exists() and (repo / "ruff.toml").exists()
     assert (repo / "CLAUDE.md").read_text() == "@AGENTS.md\n"
     assert "review-kit:start" in (repo / "AGENTS.md").read_text()
@@ -215,3 +217,142 @@ def test_record_committed_range(repo):
     sh(repo, "git", "commit", "-qm", "record", "--no-verify")
     assert review(repo, "check", "--base", base).returncode == 0
     assert "commits since" in (repo / p.stdout.strip()).read_text()
+
+
+# Each test below reproduces a defect found by the fresh-context review of 20 November 2026.
+
+def test_checks_refuse_unstaged_edits_to_staged_files(repo):
+    (repo / "app.py").write_text("KEY = 'AKIA" + "IOSFODNN7EXAMPLE'\n")
+    sh(repo, "git", "add", "app.py")
+    (repo / "app.py").write_text("KEY = None\n")  # the secret is still in the index
+    p = review(repo, "checks")
+    assert p.returncode != 0 and "unstaged edits" in p.stderr
+    assert review(repo, "check").returncode == 1
+
+
+def test_gate_files_are_high_tier_and_cannot_exempt_themselves(repo):
+    tiers = repo / ".review" / "tiers.toml"
+    tiers.write_text(tiers.read_text().replace('[exempt]\npaths = [', '[exempt]\npaths = ["*", '))
+    stage_change(repo)
+    sh(repo, "git", "add", ".review/tiers.toml")
+    p = review(repo, "check")
+    assert p.returncode == 1 and "unreviewed: .review/tiers.toml" in p.stdout
+    assert "high" in review(repo, "tier").stdout.split(".review/tiers.toml")[0].splitlines()[-1]
+
+
+def test_hand_written_record_does_not_count(repo):
+    stage_change(repo)
+    b = sh(repo, "git", "rev-parse", ":app.py").stdout.strip()
+    fake = repo / ".review" / "records" / "fake.md"
+    fake.write_text("```json\n" + json.dumps({"id": "x", "files": [{"path": "app.py", "blob": b}]}) + "\n```\n")
+    sh(repo, "git", "add", str(fake))
+    assert review(repo, "check").returncode == 1
+    assert "invalid" in review(repo, "status").stdout
+
+
+def test_changes_requested_record_does_not_count(repo):
+    base = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    stage_change(repo)
+    review(repo, "checks")
+    rid = os.path.basename(record(repo).stdout.strip())[:-3]
+    sh(repo, "git", "commit", "-qm", "change", "--no-verify")
+    assert review(repo, "check", "--base", base).returncode == 0
+    review(repo, "signoff", rid, "--by", "A Person", "--verdict", "changes-requested")
+    sh(repo, "git", "commit", "-qam", "verdict", "--no-verify")
+    assert review(repo, "check", "--base", base).returncode == 1
+
+
+def test_deletion_needs_a_record(repo):
+    sh(repo, "git", "rm", "-q", "app.py")
+    assert review(repo, "check").returncode == 1
+    review(repo, "checks")
+    assert record(repo).returncode == 0
+    assert review(repo, "check").returncode == 0
+
+
+def test_check_push_checks_the_pushed_ref_not_head(repo):
+    main = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    sh(repo, "git", "checkout", "-qb", "evil")
+    stage_change(repo)
+    sh(repo, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    evil = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    sh(repo, "git", "checkout", "-q", "main")
+    line = f"refs/heads/evil {evil} refs/heads/evil {main}\n"
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
+                       capture_output=True, text=True)
+    assert p.returncode == 1 and "app.py (in refs/heads/evil)" in p.stdout
+    ok = f"refs/heads/main {main} refs/heads/main {main}\n"
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=ok, capture_output=True, text=True)
+    assert p.returncode == 0
+
+
+@pytest.mark.skipif(shutil.which("biome") is None, reason="biome not installed")
+def test_lintgate_fails_closed_on_broken_linter_config(repo):
+    (repo / "package.json").write_text("{}\n")
+    sh(repo, PY, os.path.join(KIT, "kit", "install.py"), str(repo))
+    (repo / "biome.json").write_text("{ not json")
+    (repo / "a.js").write_text("debugger;\neval('1');\n")
+    sh(repo, "git", "add", "biome.json", "a.js", "package.json")
+    p = lintgate(repo)
+    assert p.returncode == 2 and "biome failed" in p.stderr
+
+
+def test_unicode_path_can_be_recorded(repo):
+    (repo / "café.py").write_text("X = 1\n")
+    sh(repo, "git", "add", "café.py")
+    p = lintgate(repo)
+    assert "1 file(s) checked" in p.stdout, p.stdout + p.stderr
+    review(repo, "checks")
+    assert record(repo).returncode == 0
+    assert review(repo, "check").returncode == 0
+
+
+# Round two of the review, 20 November 2026.
+
+def test_tests_refuse_a_dirty_working_tree(repo):
+    tiers = repo / ".review" / "tiers.toml"
+    tiers.write_text(tiers.read_text() + 'unit = "true"\n')
+    sh(repo, "git", "add", ".review/tiers.toml")
+    sh(repo, "git", "commit", "-qm", "tests", "--no-verify")
+    stage_change(repo)
+    (repo / "other.py").write_text("B = 1\n")  # untracked, would feed the tests
+    p = review(repo, "checks")
+    assert p.returncode != 0 and "other.py" in p.stderr
+
+
+def test_linter_config_files_are_gate_files(repo):
+    (repo / ".ruff.toml").write_text("[lint]\nselect = []\n")
+    sh(repo, "git", "add", ".ruff.toml")
+    out = review(repo, "tier").stdout
+    assert any(line.startswith("high") and ".ruff.toml" in line for line in out.splitlines())
+
+
+def test_deleting_a_linter_config_does_not_switch_it_off(repo):
+    if shutil.which("biome") is None:
+        pytest.skip("biome not installed")
+    (repo / "package.json").write_text("{}\n")
+    sh(repo, PY, os.path.join(KIT, "kit", "install.py"), str(repo))
+    sh(repo, "git", "add", ".")
+    sh(repo, "git", "commit", "-qm", "js", "--no-verify")
+    sh(repo, "git", "rm", "-q", "biome.json")
+    (repo / "a.js").write_text("const unused = 1;\n")
+    sh(repo, "git", "add", "a.js")
+    assert lintgate(repo).returncode == 1
+
+
+def test_pre_push_hook_checks_a_branch_other_than_head(repo, tmp_path):
+    if shutil.which("lefthook") is None:
+        pytest.skip("lefthook not installed")
+    remote = tmp_path / "remote.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", str(remote))
+    sh(repo, "git", "remote", "add", "origin", str(remote))
+    sh(repo, "git", "push", "-q", "--no-verify", "origin", "main")
+    sh(repo, "lefthook", "install")
+    sh(repo, "git", "checkout", "-qb", "evil")
+    stage_change(repo)
+    sh(repo, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    sh(repo, "git", "checkout", "-q", "main")
+    p = sh(repo, "git", "push", "origin", "evil", check=False)
+    out = p.stdout + p.stderr
+    assert p.returncode != 0 and "unreviewed: app.py (in refs/heads/evil)" in out, out
+    assert "evil" not in sh(repo, "git", "ls-remote", "origin").stdout

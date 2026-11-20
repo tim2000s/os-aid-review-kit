@@ -3,24 +3,31 @@
 
 A record is one markdown file under .review/records/, written when a change is reviewed and
 committed with it. It names every file the review covered together with the git blob hash of the
-exact content reviewed, so anyone can tell whether the code in front of them is the code that was
-reviewed: a file whose current hash appears in no record has not been reviewed in that form. The
-record carries the tier, who or what wrote the change, the checks run and their results, the
-findings of a fresh-context review and what was done about each, the author's own account of the
-change, and the human review, which starts as pending and is filled in by `signoff`.
+exact content reviewed (or "deleted" for a removal), so anyone can tell whether the code in front of
+them is the code that was reviewed: a file whose current hash appears in no valid record has not
+been reviewed in that form. The record carries the tier, who or what wrote the change, the checks
+run and their results, the findings of a fresh-context review and what was done about each, the
+author's own account of the change, and the human review, which starts as pending and is filled in
+by `signoff`.
+
+A record is an attestation and not a proof: anyone able to run this script can write one. The
+coverage check therefore accepts a record only when it is internally consistent with the rules
+(its tiers are no lower than the files' tiers now, a high-tier record shows every check passing and
+a way back, a person has not asked for changes), and CI reruns the checks independently.
 
 The machine-readable part is a JSON block at the top of the file; the prose below it is rendered
 from that block, so the two cannot disagree.
 
-    review.py tier [--base REF]              tier of each changed file (staged when no --base)
-    review.py checks [--base REF]            run the gate's checks on the staged change (or commits since REF)
-    review.py record [--base REF] --author A --reviewer R --explanation FILE --findings FILE [--way-back TEXT]
-    review.py check [--staged | --base REF]  fail if a changed file's content is in no record
-    review.py status                         what awaits human review, and what changed since
+    review.py tier [--base REF]                tier of each changed file (staged when no --base)
+    review.py checks [--base REF]              run the gate's checks on the staged change (or commits since REF)
+    review.py record [--base REF] --author A --reviewer R --explanation FILE [--findings FILE] [--way-back TEXT]
+    review.py check [--base REF]               fail if a changed file's content is in no valid record
+    review.py check-push                       pre-push hook: check every ref being pushed (refs on stdin)
+    review.py status                           what awaits human review, and what changed since
     review.py signoff ID --by NAME [--verdict approved|changes-requested] [--notes TEXT]
-    review.py pr-body --base REF             markdown summary for a pull request description
-    review.py trailers MSGFILE               commit-msg hook: append the record's trailers
-    review.py base                           merge-base with the upstream (or default) branch
+    review.py pr-body --base REF               markdown summary for a pull request description
+    review.py trailers MSGFILE                 commit-msg hook: append the record's trailers
+    review.py base                             merge-base with the upstream (or default) branch
 """
 import argparse
 import datetime
@@ -36,16 +43,28 @@ DIR = ".review"
 RECORDS = os.path.join(DIR, "records")
 LAST_CHECKS = os.path.join(DIR, ".last-checks.json")
 TIERS = ["low", "medium", "high"]
+DELETED = "deleted"
+ZERO = "0" * 40
+# The gate's own configuration is reviewed at the highest tier, so a change cannot loosen the gate
+# and pass through it in the same commit.
+GATE = [".review/tiers.toml", ".review/bin/*", "lefthook.yml", ".lefthook.yml", ".lefthook/*", ".semgrep/*",
+        "trufflehog.yml", "trivy.yaml", ".trivyignore", ".github/workflows/*", "biome.json", "biome.jsonc",
+        "ruff.toml", ".ruff.toml", "pyproject.toml", ".editorconfig", "detekt.yml", "config/detekt/detekt.yml",
+        ".swiftlint.yml", ".pr_agent.toml"]
+EXEMPT = [".review/records/*", ".review/README.md", ".review/.*"]
 
 
 def git(*args, check=True):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=check).stdout.strip()
+    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True)
+    if check and p.returncode != 0:
+        raise SystemExit(f"review: git {' '.join(args)} failed: {p.stderr.strip()}")
+    return p.stdout.strip()
 
 
 def config():
-    path = os.path.join(DIR, "tiers.toml")
+    path = os.environ.get("REVIEW_TIERS") or os.path.join(DIR, "tiers.toml")
     if not os.path.exists(path):
-        raise SystemExit("review: .review/tiers.toml is missing; run the kit's install.py on this repository")
+        raise SystemExit(f"review: {path} is missing; run the kit's install.py on this repository")
     with open(path, "rb") as f:
         return tomllib.load(f)
 
@@ -56,7 +75,9 @@ def match(path, patterns):
 
 def tier_of(path, cfg):
     """Highest tier whose patterns match; unmatched code takes the configured default (medium)."""
-    if path.startswith(DIR + "/") or match(path, cfg.get("exempt", {}).get("paths", [])):
+    if match(path, GATE):
+        return "high", "part of the review gate"
+    if match(path, EXEMPT) or match(path, cfg.get("exempt", {}).get("paths", [])):
         return None, "exempt"
     for t in reversed(TIERS):
         p = match(path, cfg.get(t, {}).get("paths", []))
@@ -65,34 +86,95 @@ def tier_of(path, cfg):
     return cfg.get("default_tier", "medium"), "no pattern matched; default tier"
 
 
-def changed_files(staged=True, base=None):
-    if staged:
-        out = git("diff", "--cached", "--name-only", "--diff-filter=ACMR")
+def has_commit(ref="HEAD"):
+    return subprocess.run(["git", "rev-parse", "--verify", "-q", ref], capture_output=True).returncode == 0
+
+
+def span_of(base=None, tip=None):
+    """(old, new): new is '' for the index, else a commit; old is what the change is measured from."""
+    if base is None:
+        return ("HEAD" if has_commit() else None), ""
+    tip = tip or "HEAD"
+    return git("merge-base", base, tip), git("rev-parse", tip)
+
+
+def changed(span):
+    """{path: status} for every file the span adds, modifies, deletes or changes the type of."""
+    old, new = span
+    args = ["diff", "--name-status", "-z", "--no-renames"]
+    if new == "":
+        args.append("--cached")
+        if old is None:
+            args.append(git("hash-object", "-t", "tree", "/dev/null"))
     else:
-        out = git("diff", "--name-only", "--diff-filter=ACMR", f"{git('merge-base', base, 'HEAD')}..HEAD")
-    return [p for p in out.splitlines() if p]
+        args += [old, new]
+    parts = git(*args).split("\0")
+    return {parts[i + 1]: parts[i][0] for i in range(0, len(parts) - 1, 2) if parts[i]}
 
 
-def blob(path, staged=True):
-    spec = f":{path}" if staged else f"HEAD:{path}"
-    return git("rev-parse", spec)
+def blob(path, spec, status="M"):
+    return DELETED if status == "D" else git("rev-parse", f"{spec}:{path}")
+
+
+def reviewable(span, cfg):
+    return {p: s for p, s in changed(span).items() if tier_of(p, cfg)[0]}
+
+
+def parse_record(text):
+    m = re.search(r"```json\n(.*?)\n```", text, re.S)
+    return json.loads(m.group(1)) if m else None
+
+
+def records_at(spec):
+    """Records as git holds them: '' for the index (what a commit will contain), or a commit."""
+    if spec is None:
+        return []
+    listing = (git("ls-files", "--cached", "--", RECORDS) if spec == "" else
+               git("ls-tree", "-r", "--name-only", spec, "--", RECORDS, check=False))
+    recs = [parse_record(git("show", f"{spec}:{p}")) for p in listing.splitlines() if p.endswith(".md")]
+    return [r for r in recs if r]
 
 
 def load_records():
     recs = []
-    if not os.path.isdir(RECORDS):
-        return recs
-    for name in sorted(os.listdir(RECORDS)):
-        if name.endswith(".md"):
-            with open(os.path.join(RECORDS, name)) as f:
-                m = re.search(r"```json\n(.*?)\n```", f.read(), re.S)
-            if m:
-                recs.append(json.loads(m.group(1)))
+    if os.path.isdir(RECORDS):
+        for name in sorted(os.listdir(RECORDS)):
+            if name.endswith(".md"):
+                with open(os.path.join(RECORDS, name)) as f:
+                    r = parse_record(f.read())
+                if r:
+                    recs.append(r)
     return recs
 
 
-def reviewed_blobs(records):
-    return {(f["path"], f["blob"]): r["id"] for r in records for f in r["files"]}
+def invalid(rec, cfg):
+    """Why a record cannot count as coverage, or None. Catches hand-made and inconsistent records."""
+    need = {"id", "tier", "author", "reviewer", "files", "checks", "explanation", "human_review"}
+    if not isinstance(rec, dict) or need - rec.keys():
+        return f"missing {sorted(need - rec.keys()) if isinstance(rec, dict) else 'everything'}"
+    if rec["human_review"].get("status") == "changes-requested":
+        return "a human reviewer asked for changes"
+    if not rec["checks"] or not any(c.get("name", "").startswith("lint") for c in rec["checks"]):
+        return "no checks recorded"
+    for f in rec["files"]:
+        now = tier_of(f["path"], cfg)[0]
+        if now and TIERS.index(now) > TIERS.index(f.get("tier", "low")):
+            return f"{f['path']} is {now} tier now but was recorded as {f.get('tier')}"
+    if rec["tier"] == "high" or any(f.get("tier") == "high" for f in rec["files"]):
+        if any(c.get("result") != "pass" for c in rec["checks"]):
+            return "high tier with a check that did not pass"
+        if not rec.get("way_back"):
+            return "high tier without a way back"
+    return None
+
+
+def coverage(recs, cfg):
+    out = {}
+    for r in recs:
+        if not invalid(r, cfg):
+            for f in r["files"]:
+                out[(f["path"], f["blob"])] = r["id"]
+    return out
 
 
 def render(rec):
@@ -131,10 +213,53 @@ def write(rec):
     return path
 
 
+def unstaged(paths):
+    """Staged files whose working copy differs from the index. The scanners and tests read the
+    working copy, so they would be checking something other than what gets committed."""
+    present = [p for p in paths if os.path.exists(p)]
+    if not present:
+        return []
+    return [p for p in git("diff", "--name-only", "-z", "--", *present).split("\0") if p]
+
+
+def tree_dirty(against):
+    """Tracked edits or untracked files outside what is being checked. The configured tests run on the
+    working tree as a whole, so any of these would feed them content that is not being committed."""
+    lines = git("status", "--porcelain=v1", "-z", "--untracked-files=all").split("\0")
+    out = []
+    for line in lines:
+        if not line:
+            continue
+        x, y, path = line[0], line[1], line[3:]
+        if path.startswith(DIR + "/"):
+            continue
+        if line.startswith("??") or y != " " or (against == "HEAD" and x != " "):
+            out.append(path)
+    return out
+
+
+def scope(a, cfg):
+    """(span, {path: status}, {path: blob}) for the staged change or the commits since --base."""
+    span = span_of(a.base)
+    files = reviewable(span, cfg)
+    spec = span[1]
+    if spec == "":
+        dirty = unstaged(list(files))
+        if dirty:
+            raise SystemExit("review: these staged files also have unstaged edits, so the checks would "
+                             f"read different content from what is committed: {', '.join(dirty)}. "
+                             "Stage or stash the edits (git stash --keep-index) first.")
+    elif files:
+        live = [p for p, s in files.items() if s != "D"]
+        if live and subprocess.run(["git", "diff", "--quiet", "HEAD", "--", *live]).returncode:
+            raise SystemExit("review: with --base the files must match HEAD on disk; commit or stash the edits")
+    return span, files, {p: blob(p, spec, s) for p, s in files.items()}
+
+
 def cmd_base(a):
     """The commit a push or pull request is measured from: the upstream, else the default branch."""
     for ref in ("@{u}", "origin/HEAD", "origin/main", "origin/master", "main", "master"):
-        if subprocess.run(["git", "rev-parse", "--verify", "-q", ref], capture_output=True).returncode == 0:
+        if has_commit(ref):
             print(git("merge-base", ref, "HEAD"))
             return 0
     raise SystemExit("review: no upstream or default branch to compare against")
@@ -142,33 +267,34 @@ def cmd_base(a):
 
 def cmd_tier(a):
     cfg = config()
-    for p in changed_files(a.base is None, a.base):
+    for p, s in changed(span_of(a.base)).items():
         t, why = tier_of(p, cfg)
-        print(f"{t or '-':7} {p}  ({why})")
-
-
-def scope(a):
-    """(staged?, files needing review, their blobs): the staged change, or commits since --base."""
-    staged = a.base is None
-    files = [p for p in changed_files(staged, a.base) if tier_of(p, config())[0]]
-    if not staged and files and subprocess.run(["git", "diff", "--quiet", "HEAD", "--", *files]).returncode:
-        raise SystemExit("review: with --base the files must match HEAD on disk; commit or stash the edits first")
-    return staged, files, {p: blob(p, staged) for p in files}
+        print(f"{t or '-':7} {s} {p}  ({why})")
 
 
 def cmd_checks(a):
     """Run the configured checks on the change and remember the results against its blobs."""
     cfg = config()
-    staged, files, blobs = scope(a)
     here = os.path.dirname(os.path.abspath(__file__))
-    span = ["--staged"] if staged else ["--base", a.base]
-    checks = [("lint (new findings)", [sys.executable, os.path.join(here, "lintgate.py"), *span,
-                                       "--mode", cfg.get("mode", "adopt")])]
-    if files:
+    lint = [sys.executable, os.path.join(here, "lintgate.py"), "--mode", cfg.get("mode", "adopt")]
+    if cfg.get("tests"):
+        dirty = tree_dirty("index" if a.base is None else "HEAD")
+        if dirty:
+            raise SystemExit("review: the tests run on the whole working tree, and it holds changes that are not "
+                             f"part of this {'commit' if a.base is None else 'range'}: {', '.join(dirty[:8])}"
+                             f"{' ...' if len(dirty) > 8 else ''}. Run `git stash push --keep-index "
+                             "--include-untracked`, rerun, then `git stash pop`.")
+    if a.base is None:
+        # formatting added files happens here, before the blobs are taken, so the record matches the commit
+        subprocess.run([*lint, "--staged", "--fix", "--quiet"], capture_output=True)
+    span, files, blobs = scope(a, cfg)
+    live = [p for p, s in files.items() if s != "D"]
+    checks = [("lint (new findings)", [*lint, *(["--staged"] if a.base is None else ["--base", a.base])])]
+    if live:
         checks.append(("secrets (trufflehog)", ["trufflehog", "filesystem", "--no-update", "--no-verification",
-                                                "--fail", "--config", "trufflehog.yml", *files]))
+                                                "--fail", "--config", "trufflehog.yml", *live]))
         checks.append(("semgrep (kit rules)", ["semgrep", "scan", "--metrics=off", "--error", "--quiet",
-                                               "--config", ".semgrep/", *files]))
+                                               "--config", ".semgrep/", *live]))
     for name, command in cfg.get("tests", {}).items():
         checks.append((f"tests: {name}", ["sh", "-c", command]))
     results = []
@@ -188,18 +314,19 @@ def cmd_checks(a):
 
 def cmd_record(a):
     cfg = config()
-    staged, files, blobs = scope(a)
+    span, files, blobs = scope(a, cfg)
     if not files:
         raise SystemExit("review: nothing in this change needs a record")
     try:
         with open(LAST_CHECKS) as f:
             last = json.load(f)
     except FileNotFoundError:
-        raise SystemExit("review: run `review.py checks` on the staged change first") from None
+        raise SystemExit("review: run `review.py checks` on this change first") from None
     if last["blobs"] != blobs or last.get("base") != a.base:
         raise SystemExit("review: the files changed after `review.py checks` ran, or it ran on a different "
                          "range; run it again with the same arguments")
-    findings = json.load(open(a.findings)) if a.findings else []
+    with open(a.findings) if a.findings else open(os.devnull) as fh:
+        findings = json.loads(fh.read() or "[]")
     for f in findings:
         if f.get("label") not in ("important", "nit", "pre-existing") or not f.get("disposition"):
             raise SystemExit(f"review: finding needs a label (important/nit/pre-existing) and a disposition: {f}")
@@ -213,17 +340,19 @@ def cmd_record(a):
     if tier == "high" and not a.way_back:
         raise SystemExit("review: a high-tier change needs --way-back (how to undo it once used)")
     now = datetime.datetime.now(datetime.UTC)
+    with open(a.explanation) as fh:
+        explanation = fh.read()
     rec = {
         "id": now.strftime("%Y%m%d-%H%M%S") + "-" + git("write-tree")[:7],
         "created": now.isoformat(timespec="seconds"),
         "branch": git("branch", "--show-current", check=False) or "(detached)",
-        "parent": git("rev-parse", "HEAD", check=False) or "(none)",
-        "scope": "staged change" if staged else f"commits since {git('merge-base', a.base, 'HEAD')[:10]}",
+        "parent": git("rev-parse", "HEAD") if has_commit() else "(first commit)",
+        "scope": "staged change" if a.base is None else f"commits since {span[0][:10]}",
         "tier": tier,
         "author": a.author,
         "reviewer": a.reviewer,
         "files": [{"path": p, "blob": blobs[p], "tier": tiers[p][0], "tier_reason": tiers[p][1]} for p in files],
-        "explanation": open(a.explanation).read(),
+        "explanation": explanation,
         "checks": last["checks"],
         "findings": findings,
         "way_back": a.way_back,
@@ -234,55 +363,77 @@ def cmd_record(a):
     print(path)
 
 
-def cmd_check(a):
-    cfg = config()
-    staged = a.base is None
-    recs = records_at("" if staged else "HEAD")
-    covered = reviewed_blobs(recs)
-    missing = []
-    for p in changed_files(staged, a.base):
-        if tier_of(p, cfg)[0] and (p, blob(p, staged)) not in covered:
-            missing.append(p)
-    if os.environ.get("REVIEW_SKIP") and staged:
-        print(f"review: REVIEW_SKIP set ({os.environ['REVIEW_SKIP']}); {len(missing)} unreviewed file(s) "
-              "will be flagged in the commit trailers and must be recorded before push")
-        return 0
+def uncovered(span, cfg):
+    """Files in the span whose content is in no valid record held at the span's tip."""
+    files = reviewable(span, cfg)
+    cov = coverage(records_at(span[1]), cfg)
+    return [p for p, s in files.items() if (p, blob(p, span[1], s)) not in cov]
+
+
+def report(missing):
     for p in missing:
         print(f"unreviewed: {p}")
     if missing:
-        print("review: these files are in no review record in their current form. Run "
+        print("review: these files are in no valid review record in their current form. Run "
               "`review.py checks`, a fresh-context review, then `review.py record`.", file=sys.stderr)
         return 1
     return 0
 
 
-def records_at(spec):
-    """Records as git holds them: '' for the index (what a commit will contain), or a commit."""
-    recs = []
-    listing = (git("ls-files", "--cached", "--", RECORDS) if spec == "" else
-               git("ls-tree", "-r", "--name-only", spec, "--", RECORDS, check=False))
-    for path in listing.splitlines():
-        if path.endswith(".md"):
-            m = re.search(r"```json\n(.*?)\n```", git("show", f"{spec}:{path}"), re.S)
-            if m:
-                recs.append(json.loads(m.group(1)))
-    return recs
+def cmd_check(a):
+    cfg = config()
+    span = span_of(a.base)
+    if a.base is None:
+        dirty = unstaged(list(reviewable(span, cfg)))
+        if dirty:
+            print("review: staged files with unstaged edits (the commit hooks would scan the wrong content): "
+                  + ", ".join(dirty), file=sys.stderr)
+            return 1
+    missing = uncovered(span, cfg)
+    if os.environ.get("REVIEW_SKIP") and a.base is None:
+        print(f"review: REVIEW_SKIP set ({os.environ['REVIEW_SKIP']}); {len(missing)} unreviewed file(s) "
+              "will be flagged in the commit trailers and must be recorded before push")
+        return 0
+    return report(missing)
+
+
+def cmd_check_push(a):
+    """Lines on stdin are '<local ref> <local sha> <remote ref> <remote sha>', one per ref pushed."""
+    cfg = config()
+    missing = []
+    for line in sys.stdin.read().splitlines():
+        parts = line.split()
+        if len(parts) != 4 or parts[1] == ZERO:
+            continue  # malformed, or a deletion of the remote ref
+        local, remote = parts[1], parts[3]
+        if remote != ZERO and has_commit(remote):
+            base = remote
+        else:
+            base = next((r for r in ("origin/HEAD", "origin/main", "origin/master") if has_commit(r)), None)
+        if base is None:
+            print(f"review: no base to measure {parts[0]} from; nothing on the remote to compare with",
+                  file=sys.stderr)
+            return 1
+        missing += [f"{p} (in {parts[0]})" for p in uncovered(span_of(base, local), cfg)]
+    return report(missing)
 
 
 def cmd_status(a):
+    cfg = config()
     recs = load_records()
-    pending = [r for r in recs if r["human_review"]["status"] == "pending"]
+    pending = [r for r in recs if r.get("human_review", {}).get("status") == "pending"]
     for r in sorted(pending, key=lambda r: (-TIERS.index(r["tier"]), r["id"])):
         print(f"pending  {r['tier']:6} {r['id']}  {len(r['files'])} file(s), written by {r['author']}")
+    for r in recs:
+        why = invalid(r, cfg)
+        if why:
+            print(f"invalid  {r.get('id', '?')}: {why}; it does not count as review")
     latest = {}
     for r in recs:
         for f in r["files"]:
             latest[f["path"]] = (f["blob"], r["id"])
     for path, (b, rid) in sorted(latest.items()):
-        if not os.path.exists(path):
-            continue
-        now = git("hash-object", path)
-        if now != b:
+        if b != DELETED and os.path.exists(path) and git("hash-object", path) != b:
             print(f"changed  {path}: differs from the content reviewed in {rid}")
     if not pending:
         print("review: no records await human review")
@@ -292,7 +443,7 @@ def cmd_signoff(a):
     recs = {r["id"]: r for r in load_records()}
     rec = recs.get(a.id) or sys.exit(f"review: no record {a.id}")
     drift = [f["path"] for f in rec["files"]
-             if os.path.exists(f["path"]) and git("hash-object", f["path"]) != f["blob"]]
+             if f["blob"] != DELETED and os.path.exists(f["path"]) and git("hash-object", f["path"]) != f["blob"]]
     if drift and not a.force:
         raise SystemExit("review: these files differ from the reviewed content, so a sign-off would not "
                          f"describe what is on disk: {', '.join(drift)} (use --force to sign the record anyway)")
@@ -302,29 +453,31 @@ def cmd_signoff(a):
 
 
 def cmd_pr_body(a):
-    recs = load_records()
-    covered = reviewed_blobs(recs)
-    files = [p for p in changed_files(False, a.base) if tier_of(p, config())[0]]
-    ids = sorted({covered[(p, blob(p, False))] for p in files if (p, blob(p, False)) in covered})
+    cfg = config()
+    span = span_of(a.base)
+    recs = records_at(span[1])
+    cov = coverage(recs, cfg)
+    files = reviewable(span, cfg)
+    keyed = {p: (p, blob(p, span[1], s)) for p, s in files.items()}
+    ids = sorted({cov[k] for k in keyed.values() if k in cov})
     print("## Review records\n")
     for r in (r for r in recs if r["id"] in ids):
         h = r["human_review"]
         print(f"- `{r['id']}`: {r['tier']} tier, written by {r['author']}, reviewed by {r['reviewer']}; "
               f"{sum(c['result'] == 'pass' for c in r['checks'])}/{len(r['checks'])} checks passed; "
               f"{len(r['findings'])} finding(s); human review {h['status']}")
-    unrev = [p for p in files if (p, blob(p, False)) not in covered]
+    unrev = [p for p, k in keyed.items() if k not in cov]
     if unrev:
-        print("\nNot covered by any record in their current form: " + ", ".join(f"`{p}`" for p in unrev))
+        print("\nNot covered by any valid record in their current form: " + ", ".join(f"`{p}`" for p in unrev))
 
 
 def cmd_trailers(a):
-    recs = records_at("")
-    staged = set(git("diff", "--cached", "--name-only").splitlines())
-    new = [r for r in recs if os.path.join(RECORDS, f"{r['id']}.md") in staged]
+    staged = set(git("diff", "--cached", "--name-only", "-z").split("\0"))
+    new = [r for r in records_at("") if os.path.join(RECORDS, f"{r['id']}.md") in staged]
     lines = []
     for r in new:
         lines += [f"Review-Record: {r['id']}", f"Review-Tier: {r['tier']}", f"Written-By: {r['author']}",
-                  f"Reviewed-By: {r['reviewer']}", "Human-Review: pending"]
+                  f"Reviewed-By: {r['reviewer']}", f"Human-Review: {r['human_review']['status']}"]
     if os.environ.get("REVIEW_SKIP"):
         lines.append(f"Review-Skipped: {os.environ['REVIEW_SKIP']}")
     if lines:
@@ -350,6 +503,7 @@ def main(argv=None):
     s.add_argument("--findings", help="file: JSON list of {label, summary, disposition}")
     s.add_argument("--way-back")
     s = sub.add_parser("check"); s.add_argument("--base")
+    sub.add_parser("check-push")
     sub.add_parser("status")
     s = sub.add_parser("signoff"); s.add_argument("id"); s.add_argument("--by", required=True)
     s.add_argument("--verdict", choices=["approved", "changes-requested"], default="approved")
@@ -359,8 +513,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     os.chdir(git("rev-parse", "--show-toplevel"))
     return {"tier": cmd_tier, "checks": cmd_checks, "record": cmd_record, "check": cmd_check,
-            "status": cmd_status, "signoff": cmd_signoff, "pr-body": cmd_pr_body,
-            "trailers": cmd_trailers, "base": cmd_base}[a.cmd](a) or 0
+            "check-push": cmd_check_push, "status": cmd_status, "signoff": cmd_signoff,
+            "pr-body": cmd_pr_body, "trailers": cmd_trailers, "base": cmd_base}[a.cmd](a) or 0
 
 
 if __name__ == "__main__":

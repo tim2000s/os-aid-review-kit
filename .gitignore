@@ -1,2 +1,12 @@
 __pycache__/
 .pytest_cache/
+
+# review kit
+.env
+.env.*
+*.pem
+google-services.json
+GoogleService-Info.plist
+.review/.last-checks.json
+.review/.test-output.txt
+.detekt.sarif

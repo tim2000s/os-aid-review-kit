@@ -1,0 +1,20 @@
+# Tiers by what a file can affect, never by who wrote it. A file takes the highest tier whose
+# patterns match it; a file no pattern matches takes default_tier, and where the tier is unclear
+# the higher one applies. Exempt files need no review record.
+mode = "adopt"          # adopt: only findings a change introduces fail; greenfield: every finding fails
+default_tier = "medium"
+
+[high]
+paths = []
+
+[medium]
+paths = []
+
+[low]
+paths = ["*.md", "docs/*", "**/docs/*", "scripts/analysis/*", "*.ipynb"]
+
+[exempt]
+paths = ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.pdf", "LICENSE*", "*.lock", "package-lock.json"]
+
+[tests]
+# name = "shell command"; each runs in `review.py checks` and its result goes into the record.
