@@ -55,6 +55,17 @@ preset that matches its layout (AndroidAPS, Trio, Nightscout or a default), copi
 the first time and editable there. The three memory repositories are opted out because they commit
 on a timer and hold memory files rather than code.
 
+## The assistant guard
+
+Claude Code runs `kit/guard.py` before each shell command and file edit (added on 20 November 2026 with
+`global.py on --claude`). It refuses commands that skip or switch off the hooks, such as `--no-verify`
+or `git commit -n`, commands that change the gate's settings or run git with another home or config,
+shell or editor writes to records, hooks, `.git/config`, `~/.gitconfig` and Claude Code's settings,
+and any `review.py signoff` by the assistant. It also refuses some plain reads of the gate's settings
+(`git config <key>` without `--get`). A live attempt at a `--no-verify` commit was refused on 20
+November 2026. The matching is
+best-effort, and the README lists the deliberate evasions it does not catch.
+
 ## What a reviewer is given
 
 Each record lists every file it covers with the blob hash of the content that was reviewed, so
@@ -118,14 +129,22 @@ an advisory PR-Agent review and an optional SonarQube scan.
 ## How it was verified
 
 The kit's test suite builds throwaway repositories and runs the real tools against them. It holds
-48 tests. Each one was run against a deliberately broken version of the code it covers and failed
-there, because a test that cannot fail checks nothing.
+108 tests, run on Linux, macOS and Windows by `kit-tests.yml`; all passed on all three on 20
+November 2026, apart from three that do not apply on Windows. The tests written for each defect
+and each new behaviour were run against a version with the defect put back and failed there,
+because a test that cannot fail checks nothing.
 
-Six rounds of fresh-context review were run in all. Three were on the original build and found 8,
+Before the cross-platform work, six rounds of fresh-context review were run. Three were on the
+original build and found 8,
 4 and 1 important defects. Three were on the machine-wide extension and found 6, 2 and 1. Every one
 was fixed and has a regression test. Most of the second set were ways the upstream rule could have
 let the developer's own unreviewed code through: a pushed branch counted as upstream, a stale
 branch excused a deletion, and a merge could silently undo a fork's own dosing change.
+
+The cross-platform work, the guard and the size checks then had three more rounds, which found 3,
+1 and 1 important defects, all in the guard; the first Windows run on GitHub failed 15 tests,
+nearly all on text encoding, and the fixes went through two further short reviews. Each of these
+is recorded in `.review/records/`.
 
 On 20 November, after the global hooks were switched on, an unreviewed commit was attempted in
 three real repositories, each in a throwaway worktree: oref-investigations (ambient), Boost-AAPS-core

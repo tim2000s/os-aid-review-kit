@@ -135,7 +135,7 @@ command that would skip or switch off the gate (`--no-verify` in any abbreviatio
 overrides), a `review.py signoff`, which only the person who read the code may enter, and an edit
 made by hand to a record or the ledger. It also refuses shell writes to those files, to `.git/config`,
 `~/.gitconfig`, `lefthook-local.yml` and Claude Code's settings, and variables such as `HOME=` and
-`LEFTHOOK=false` that run git without the gate. Reading settings and hooks is allowed, and commit
+`LEFTHOOK=false` that run git without the gate. Reading settings with `git config --get` and reading hooks are allowed, and commit
 messages and heredoc bodies are not inspected, so text about the gate does not trip it. Every
 failure inside the guard exits 2, the only status Claude Code treats as a refusal. The matching is
 best-effort. A script written to disk and then run is not inspected, and nor are a few deliberate
