@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Turn the review gate on for every repository on this machine, or off again.
 
-    global.py on [--opt-out REPO ...] [--claude]   point git's global core.hooksPath at the kit's
-                                        dispatcher; --claude also adds kit/guard.py to Claude Code
-    global.py off                       remove both, if they are the kit's
+    global.py on [--opt-out REPO ...] [--claude] [--codex] [--gemini]
+                                        point git's global core.hooksPath at the kit's dispatcher, and
+                                        add kit/guard.py to each assistant named
+    global.py off                       remove the hooks path and every guard, if they are the kit's
     global.py status                    say what is set
 
 A repository with the kit committed runs its own gate through the dispatcher; every other one is
@@ -17,6 +18,7 @@ under the directories given by --scan.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -25,32 +27,94 @@ UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOKS = os.path.join(KIT, "global-hooks")
-SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
 _K = KIT.replace("\\", "/")  # forward slashes, which sh accepts on every platform
-GUARD = {"type": "command", "command": f'sh "{_K}/kit/py" "{_K}/kit/guard.py"'}
-MATCHER = "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit"
+GUARD = f'sh "{_K}/kit/py" "{_K}/kit/guard.py"'
+HOME = os.path.expanduser("~")
+# each assistant's user settings file, the event its pre-tool hooks hang from, the tools to match, and
+# the hook entry; a timeout is given because Gemini's is in milliseconds and Codex's in seconds
+AGENTS = {
+    "claude": (os.path.join(HOME, ".claude", "settings.json"), "PreToolUse",
+               "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit", {"type": "command", "command": GUARD}),
+    "codex": (os.path.join(os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex"), "hooks.json"),
+              "PreToolUse", "Bash|apply_patch|Edit|Write",
+              {"type": "command", "command": GUARD + " --agent codex", "timeout": 30}),
+    "gemini": (os.path.join(HOME, ".gemini", "settings.json"), "BeforeTool", "run_shell_command|write_file|replace",
+               {"type": "command", "command": GUARD + " --agent gemini", "name": "review-guard", "timeout": 30000}),
+}
+NAMES = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI"}
+# the instructions file each assistant reads in every project, which gets the kit's marked block
+INSTRUCTIONS = {"claude": os.path.join(HOME, ".claude", "CLAUDE.md"),
+                "codex": os.path.join(os.path.dirname(AGENTS["codex"][0]), "AGENTS.md"),
+                "gemini": os.path.join(HOME, ".gemini", "GEMINI.md")}
+START, END = "<!-- review-kit:start", "<!-- review-kit:end -->"
 
 
-def claude_guard(add):
-    """Add the guard to Claude Code's user settings, or remove it, leaving every other setting and hook
-    alone: only a hook entry running exactly the kit's guard command is touched."""
-    settings = {}
-    if os.path.exists(SETTINGS):
-        with open(SETTINGS, encoding="utf-8") as f:
-            settings = json.load(f)
-    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    for entry in pre:
-        entry["hooks"] = [h for h in entry.get("hooks", []) if h.get("command") != GUARD["command"]]
-    pre[:] = [e for e in pre if e.get("hooks")]
+def instructions(agent, add):
+    """Insert or refresh the kit's marked block in the assistant's global instructions, or remove it."""
+    path = os.path.realpath(INSTRUCTIONS[agent])
+    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    if not add and START not in text:
+        return
+    if START in text and END not in text:
+        raise SystemExit(f"global: {path} has the kit's start marker but no end marker; fix it by hand")
+    if START in text:
+        before, after = text[:text.index(START)].rstrip("\n"), text[text.index(END) + len(END):].lstrip("\n")
+        text = (before + "\n" + after).strip("\n")
+        text = text + "\n" if text else ""
     if add:
-        pre.append({"matcher": MATCHER, "hooks": [GUARD]})
-    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
-    tmp = SETTINGS + ".kit-tmp"
+        with open(os.path.join(KIT, "templates", "assistant-instructions.md"), encoding="utf-8") as f:
+            block = f.read().strip()
+        text = text.rstrip() + ("\n\n" if text.strip() else "") + block + "\n"
+    elif not os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    print(f"global: review instructions {'added to' if add else 'removed from'} {path}")
+
+
+def install_guard(agent, add):
+    """Add the guard to one assistant's user settings, or remove it, leaving every other setting and
+    hook alone: only a hook entry running the kit's guard command is touched."""
+    path, event, matcher, entry = AGENTS[agent]
+    path = os.path.realpath(path)  # write through a symlink into a dotfiles folder, not over it
+    if not add and not os.path.exists(path):
+        return
+    settings = load_settings(path)
+    if not add and event not in settings.get("hooks", {}):
+        return
+    pre = settings.setdefault("hooks", {}).setdefault(event, [])
+    for group in pre:
+        group["hooks"] = [h for h in group.get("hooks", []) if not str(h.get("command", "")).startswith(GUARD)]
+    pre[:] = [g for g in pre if g.get("hooks")]
+    if add:
+        pre.append({"matcher": matcher, "hooks": [entry]})
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".kit-tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(settings, f, indent=2)
         f.write("\n")
-    os.replace(tmp, SETTINGS)  # a crash mid-write cannot leave Claude Code with a half-written file
-    print(f"global: Claude Code guard {'added to' if add else 'removed from'} {SETTINGS}")
+    if os.path.exists(path):
+        shutil.copymode(path, tmp)  # keep a settings file that holds tokens as private as it was
+    os.replace(tmp, path)  # a crash mid-write cannot leave the assistant with a half-written file
+    print(f"global: {NAMES[agent]} guard {'added to' if add else 'removed from'} {path}")
+    if add and agent == "codex":
+        print("global: Codex runs a hook only once it is trusted; open Codex, run /hooks and trust the review guard")
+    hooks_config = settings.get("hooksConfig", {})
+    if add and agent == "gemini" and (hooks_config.get("enabled") is False or "review-guard" in hooks_config.get(
+            "disabled", [])):
+        print("global: Gemini CLI has hooks, or this one, switched off in hooksConfig, so the guard will not run")
+
+
+def load_settings(path):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except ValueError as e:
+        raise SystemExit(f"global: {path} is not plain JSON ({e}); it may hold comments, which the kit "
+                         "cannot preserve, so add the guard there by hand or remove the comments") from None
 
 
 def current():
@@ -64,7 +128,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("action", choices=["on", "off", "status"])
     ap.add_argument("--opt-out", nargs="*", default=[])
-    ap.add_argument("--claude", action="store_true", help="also add the guard hook to Claude Code")
+    for agent in AGENTS:
+        ap.add_argument(f"--{agent}", action="store_true", help=f"also add the guard hook to {NAMES[agent]}")
     ap.add_argument("--scan", nargs="*", default=[], help="directories to search for repos with their own hooksPath")
     a = ap.parse_args(argv)
     now = current()
@@ -73,13 +138,18 @@ def main(argv=None):
         print(f"core.hooksPath (global): {now or 'unset'}" + (" (the kit)" if ours else ""))
         return 0
     if a.action == "off":
+        for agent in AGENTS:
+            install_guard(agent, False)
+            instructions(agent, False)
         if not now or os.path.normcase(os.path.abspath(now)) != os.path.normcase(HOOKS):
-            raise SystemExit(f"global: core.hooksPath is {now or 'unset'}, not the kit's; leaving it")
+            print(f"global: core.hooksPath is {now or 'unset'}, not the kit's; leaving it")
+            return 0
         subprocess.run(["git", "config", "--global", "--unset", "core.hooksPath"], check=True)
         print("global: removed; repositories run their own .git/hooks again")
-        if os.path.exists(SETTINGS):
-            claude_guard(False)
         return 0
+    for agent in AGENTS:
+        if getattr(a, agent):
+            load_settings(os.path.realpath(AGENTS[agent][0]))  # fail before anything is changed
     same = now and os.path.normcase(os.path.abspath(now)) == os.path.normcase(HOOKS)
     if now and not same:
         raise SystemExit(f"global: core.hooksPath is already {now}; merge it with {HOOKS} by hand")
@@ -87,8 +157,10 @@ def main(argv=None):
     print(f"global: core.hooksPath = {HOOKS}")
     for name in os.listdir(HOOKS):  # a copied or unzipped kit can lose the executable bit
         os.chmod(os.path.join(HOOKS, name), 0o755)  # noqa: S103 nosemgrep
-    if a.claude:
-        claude_guard(True)
+    for agent in AGENTS:
+        if getattr(a, agent):
+            install_guard(agent, True)
+            instructions(agent, True)
     for repo in a.opt_out:
         subprocess.run(["git", "-C", repo, "config", "review.ambient", "false"], check=True)
         print(f"global: opted out {repo}")

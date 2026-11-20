@@ -107,7 +107,7 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (108
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (123
 tests; the tests for each behaviour were run against a deliberately broken version of it and failed
 there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.
@@ -129,7 +129,26 @@ the suite on all three systems with the real tools.
 
 ## The assistant guard
 
-`global.py on --claude` adds `kit/guard.py` to Claude Code as a PreToolUse hook. It refuses a Bash
+`global.py on --claude --codex --gemini` adds `kit/guard.py` to each assistant named, as a hook
+that runs before every shell command and file edit, and writes the review steps
+(`templates/assistant-instructions.md`) into the instructions file that assistant reads in every
+project. `off` removes both.
+
+| Assistant | Hook setting | Tools matched | How the guard refuses |
+|---|---|---|---|
+| Claude Code | `~/.claude/settings.json`, `PreToolUse` | Bash, PowerShell, Edit, Write, MultiEdit, NotebookEdit | exit 2, reason on stderr |
+| Codex | `~/.codex/hooks.json` (or `$CODEX_HOME`), `PreToolUse` | Bash, apply_patch (paths read from the patch) | `permissionDecision: "deny"` on stdout |
+| Gemini CLI | `~/.gemini/settings.json`, `BeforeTool` | run_shell_command, write_file, replace | exit 2, reason on stderr |
+
+Codex runs a new or changed hook only once it is trusted (`/hooks` in Codex), and its documentation
+says some specialised tool paths can opt out of hooks; `write_stdin` into a running shell, and the
+feature-flagged `js_repl`, are not matched. Gemini runs hooks
+unless `hooksConfig.enabled` is false, which `global.py` reports. Each assistant lets a call through
+on any other outcome, so every failure inside the guard is turned into a refusal. A Codex session
+asked to commit with `--no-verify` was refused on 20 November 2026; Gemini CLI was not signed in on
+the test machine, so its guard is tested only with its documented tool names and fields.
+
+It refuses a shell
 command that would skip or switch off the gate (`--no-verify` in any abbreviation, `git commit -n`,
 `core.hooksPath`, `LEFTHOOK=0`, the opt-out and upstream settings, `global.py off`, environment
 overrides), a `review.py signoff`, which only the person who read the code may enter, and an edit

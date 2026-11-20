@@ -709,6 +709,9 @@ def guard(tool, **tool_input):
     'git commit -m "Fix X (closes #3)" --no-verify', 'git commit -m "a; b" --no-verify', 'git commit -m "a & b" -n',
     'git commit -m "x|y" --no-verify', 'git commit -m "$(printf x)" --no-verify',
     "git -c alias.c='commit --no-verify' c -m x", "git config alias.ci 'commit -n'", "unset HOME; git commit -m x",
+    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: .review/records/a.md\n*** End Patch\nEOF",
+    'git commit -m "$(git config core.hooksPath /tmp)"', "cp -t .review/records/ a.md",
+    "cp --target-directory=.review/records a.md", "mv a.md .review/records",
 ])
 def test_guard_refuses_ways_round_the_gate(command):
     assert guard("Bash", command=command) == 2
@@ -719,7 +722,10 @@ def test_guard_refuses_ways_round_the_gate(command):
     "git config --global --get core.hooksPath", "python3 .review/bin/review.py status", "git push origin main",
     'git commit -m "Refuse --no-verify in the guard"', "wget --no-verbose https://example.org/x",
     "cat .git/hooks/pre-commit", "ls .git/hooks", 'git add kit/review.py && git commit -m "fix signoff"',
-    "git add .review/records/a.md", 'git commit -m "Set core.hooksPath from global.py"',
+    "git add .review/records/a.md", "cp ~/.codex/hooks.json /tmp/backup.json",
+    'python3 .review/bin/review.py record --way-back "git revert x; python3 kit/global.py off"',
+    "echo 'a; git commit --no-verify' > notes.txt",
+    'git commit -m "Set core.hooksPath from global.py"',
     "git commit -F - <<'EOF'\nBlock core.hooksPath and --no-verify\nEOF",
 ])
 def test_guard_allows_ordinary_work(command):
@@ -844,3 +850,114 @@ def test_trailers_keep_a_non_ascii_commit_message_intact(repo):
     review(repo, "trailers", str(msg))
     text = msg.read_bytes().decode("utf-8")
     assert text.startswith("Café ≥ 3.9 mmol/L") and "Review-Record:" in text
+
+
+def guard_run(agent, tool, **tool_input):
+    event = json.dumps({"tool_name": tool, "tool_input": tool_input})
+    return subprocess.run([PY, GUARD, "--agent", agent], input=event, capture_output=True, **UTF8)
+
+
+def codex_denied(p):
+    out = json.loads(p.stdout) if p.stdout.strip() else {}
+    return p.returncode == 0 and out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+def test_guard_for_codex_denies_on_stdout_and_reads_patches():
+    assert codex_denied(guard_run("codex", "Bash", command="git commit --no-verify -m x"))
+    patch = "*** Begin Patch\n*** Update File: .review/records/a.md\n@@\n-pending\n+approved\n*** End Patch\n"
+    assert codex_denied(guard_run("codex", "apply_patch", command=patch))
+    moved = "*** Begin Patch\n*** Update File: notes.md\n*** Move to: .git/hooks/pre-commit\n*** End Patch\n"
+    assert codex_denied(guard_run("codex", "apply_patch", command=moved))
+    ok = guard_run("codex", "apply_patch", command="*** Begin Patch\n*** Add File: app.py\n+x = 1\n*** End Patch\n")
+    assert ok.returncode == 0 and not ok.stdout.strip()
+    bad = subprocess.run([PY, GUARD, "--agent", "codex"], input="not json", capture_output=True, **UTF8)
+    assert codex_denied(bad), "a failure inside the guard must still deny"
+
+
+def test_guard_for_gemini_reads_its_tool_names():
+    assert guard_run("gemini", "run_shell_command", command="git commit -n -m x").returncode == 2
+    assert guard_run("gemini", "write_file", file_path="/h/.gemini/settings.json", content="{}").returncode == 2
+    assert guard_run("gemini", "replace", file_path="/r/.review/records/a.md", old_string="a", new_string="b"
+                     ).returncode == 2
+    assert guard_run("gemini", "replace", file_path="/r/app.py", old_string="a", new_string="b").returncode == 0
+    assert guard_run("gemini", "run_shell_command", command="git status").returncode == 0
+
+
+def test_global_on_adds_the_guard_for_codex_and_gemini_and_off_removes_it(tmp_path):
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".gemini").mkdir()
+    stop = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "sync.sh"}]}]}}
+    (home / ".codex" / "hooks.json").write_text(json.dumps(stop))
+    (home / ".gemini" / "settings.json").write_text(json.dumps({"theme": "x"}))
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    env.pop("CODEX_HOME", None)
+    run = [PY, os.path.join(KIT, "kit", "global.py")]
+    for _ in range(2):
+        subprocess.run([*run, "on", "--codex", "--gemini"], env=env, check=True, capture_output=True)
+    codex = json.loads((home / ".codex" / "hooks.json").read_text())
+    gemini = json.loads((home / ".gemini" / "settings.json").read_text())
+    assert codex["hooks"]["Stop"] == stop["hooks"]["Stop"] and len(codex["hooks"]["PreToolUse"]) == 1
+    assert "--agent codex" in json.dumps(codex["hooks"]["PreToolUse"])
+    assert gemini["theme"] == "x" and len(gemini["hooks"]["BeforeTool"]) == 1
+    assert "run_shell_command" in gemini["hooks"]["BeforeTool"][0]["matcher"]
+    subprocess.run([*run, "off"], env=env, check=True, capture_output=True)
+    codex = json.loads((home / ".codex" / "hooks.json").read_text())
+    gemini = json.loads((home / ".gemini" / "settings.json").read_text())
+    assert codex["hooks"]["PreToolUse"] == [] and codex["hooks"]["Stop"] == stop["hooks"]["Stop"]
+    assert gemini["hooks"]["BeforeTool"] == []
+
+
+def test_global_on_writes_each_assistants_instructions_once_and_off_restores_them(tmp_path):
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "AGENTS.md").write_text("Codex Instructions\nOwn rule.\n")
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    env.pop("CODEX_HOME", None)
+    run = [PY, os.path.join(KIT, "kit", "global.py")]
+    for _ in range(2):
+        subprocess.run([*run, "on", "--codex", "--gemini"], env=env, check=True, capture_output=True)
+    agents = (home / ".codex" / "AGENTS.md").read_text()
+    assert agents.startswith("Codex Instructions\nOwn rule.") and agents.count("review-kit:start") == 1
+    assert "review.py record" in (home / ".gemini" / "GEMINI.md").read_text()
+    subprocess.run([*run, "off"], env=env, check=True, capture_output=True)
+    assert (home / ".codex" / "AGENTS.md").read_text() == "Codex Instructions\nOwn rule.\n"
+    assert "review-kit" not in (home / ".gemini" / "GEMINI.md").read_text()
+
+
+def test_guard_protects_a_relocated_codex_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codexhome"))
+    assert guard("Edit", file_path=str(tmp_path / "codexhome" / "hooks.json")) == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks and modes differ on Windows")
+def test_settings_keep_their_symlink_and_mode_and_commented_json_stops_first(tmp_path):
+    home = tmp_path / "home"
+    (home / ".gemini").mkdir(parents=True)
+    real = tmp_path / "dotfiles" / "gemini.json"
+    real.parent.mkdir()
+    real.write_text('{"mcpServers": {}}')
+    real.chmod(0o600)
+    (home / ".gemini" / "settings.json").symlink_to(real)
+    env = {**os.environ, "HOME": str(home)}
+    run = [PY, os.path.join(KIT, "kit", "global.py")]
+    subprocess.run([*run, "on", "--gemini"], env=env, check=True, capture_output=True)
+    assert (home / ".gemini" / "settings.json").is_symlink() and "BeforeTool" in real.read_text()
+    assert oct(real.stat().st_mode & 0o777) == "0o600"
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text('{"model": "x"}')
+    real.write_text('{"a": 1, // a comment\n}')
+    p = subprocess.run([*run, "on", "--claude", "--gemini"], env=env, capture_output=True, **UTF8)
+    assert p.returncode != 0 and "not plain JSON" in p.stderr
+    assert json.loads((home / ".claude" / "settings.json").read_text()) == {"model": "x"}, "nothing changed first"
+
+
+def test_off_leaves_settings_without_the_guard_untouched(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text('{"model": "x"}')
+    (home / ".claude" / "CLAUDE.md").write_text("Mine.\n")
+    env = {**os.environ, "HOME": str(home)}
+    subprocess.run([PY, os.path.join(KIT, "kit", "global.py"), "off"], env=env, capture_output=True)
+    assert (home / ".claude" / "settings.json").read_text() == '{"model": "x"}'
+    assert (home / ".claude" / "CLAUDE.md").read_text() == "Mine.\n"
