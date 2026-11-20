@@ -1,0 +1,120 @@
+<p><em>For people writing open-source AID code with an AI assistant</em></p>
+  <p>A set of checks and a written review record, both run on every commit. Code written with an AI assistant reaches a maintainer with a list of what was checked and the hash of the content each check saw.</p>
+<h2>Why it exists</h2>
+<p>Open-source automated insulin delivery projects have become wary of AI-written contributions. AndroidAPS stopped accepting AI-generated pull requests on 15 June 2026. The project gave two reasons: reviewing such code took maintainers longer than the model had taken to write it, and unverified code is a risk it will not accept.</p>
+<p>The kit puts the checking on the person writing the code, before anything is pushed, and writes down what was checked. Each reviewed file is recorded with the git hash of the content that was reviewed. A maintainer can then compare that hash with the file in front of them and see at once whether it is the reviewed version.</p>
+
+<h2>What happens to one change</h2>
+<p>Suppose your assistant has changed the SMB limit logic in an AndroidAPS fork. That file can change a dose, so the kit puts it in the high tier. The tier is set by what a file can affect. Before the change can be committed, four things happen.</p>
+<ol>
+  <li><h3>The checks run on the staged files</h3>
+    <p>The language's linters, the secret scanner, the kit's static-analysis rules and the project's tests all run against what is staged. Each tool is described in the next section. The linters are run twice, on the file before the change and after it, and only a rise in a rule's count fails. An established project carries years of old findings, and none of them are put in front of you.</p></li>
+  <li><h3>A second model session reviews the diff</h3>
+    <p>The assistant starts a fresh session that did not write the change and gives it the diff and the project's review checklist (REVIEW.md), without its own reasoning. An important finding must be fixed before commit, after which the checks run again. Findings labelled nit or pre-existing are recorded and do not block.</p></li>
+  <li><h3>The review is recorded</h3>
+    <p>The record lists each file with its hash, each check with its result, each finding with what was done about it, and a plain account of what the change does and what could go wrong. High-tier records also state how to undo the change. The record is refused when a file changed after the checks ran or an important finding is still open. A high-tier record is also refused while any check has failed or not run, or when it gives no way back.</p></li>
+  <li><h3>The commit carries the evidence</h3>
+    <p>Git refuses the commit when any file in it is missing from a record in the form being committed. Once it goes through, the message gains these lines:</p>
+<pre><code>Cap SMB at maxSMBBasalMinutes when the profile switches mid-cycle
+
+Review-Record: 20261120-181722-2337a36
+Review-Tier: high
+Written-By: claude-opus-5-5
+Reviewed-By: claude-opus-5-5, fresh context
+Human-Review: pending
+Review-Ledger: ~/.review-ledger</code></pre></li>
+</ol>
+<p>A push is checked the same way, for every branch in it. A person reviewing later runs <code>review.py status</code> to see what is waiting and whether anything has changed since its review, then <code>review.py signoff</code> to record a verdict. Sign-off is refused while the file differs from the reviewed one. The reviewer can force it, and the difference is then written into the record.</p>
+<p>The developer does not run the pre-commit steps by hand. The assistant reads its instructions at the start of each session, so you ask for the change and it does the rest. A skipped step shows up as a refused commit, with a message naming what is missing. Work in progress can be committed with <code>REVIEW_SKIP="reason"</code>, which writes the reason into the message; the push is then refused until the files have a record.</p>
+
+<h2>The tools it uses</h2>
+<p>The kit is a few Python scripts that call established open-source tools and keep the records. The versions below are the ones it was tested with.</p>
+<h3>Checks on the code</h3>
+<figure class="wp-block-table"><table>
+  <thead><tr><th>Tool</th><th>What it looks for</th><th>When it runs</th></tr></thead>
+  <tbody>
+    <tr><td>Ruff 0.17.3</td><td>Python: likely bugs and unused code, and functions with a cyclomatic complexity above 10 or more than 50 statements. Where the kit is committed to a project it also flags insecure calls, such as <code>eval</code> or a shell command built from a string.</td><td>Checks; pull requests</td></tr>
+    <tr><td>Biome 2.6.8</td><td>JavaScript and TypeScript: likely bugs and suspicious patterns. It has no size or complexity rule.</td><td>Checks; pull requests</td></tr>
+    <tr><td>ktlint 1.8.0</td><td>Kotlin: layout and naming against the standard Kotlin style. Runs on Java.</td><td>Checks; pull requests</td></tr>
+    <tr><td>detekt 1.23.8</td><td>Kotlin: methods of 50 lines or more, cyclomatic complexity of 12 or more, 7 or more parameters, blocks nested 4 or more deep, and swallowed exceptions. Runs on Java.</td><td>Checks; pull requests</td></tr>
+    <tr><td>SwiftLint 0.65.1</td><td>Swift: function bodies longer than 60 lines or with a cyclomatic complexity above 12. Force unwraps and force casts are errors, since one that fails at run time stops the loop.</td><td>Checks; pull requests</td></tr>
+    <tr><td>mypy 2.4.1</td><td>Python type errors in the files a pull request changes. Advisory: it warns and does not fail.</td><td>Pull requests</td></tr>
+    <tr><td>TruffleHog 3.100.0</td><td>Secrets, meaning credentials such as API keys and private keys. The kit adds detectors for Nightscout access tokens and API secrets, which the built-in detectors miss because Nightscout has no public endpoint to verify them against.</td><td>Checks; every commit; pull requests</td></tr>
+    <tr><td>Semgrep 1.186.0</td><td>Eleven rules written for this kind of code: plain-http URLs, hard-coded URLs and IP addresses, SQL built from strings (in Python, JavaScript, Kotlin and Swift), empty catch blocks, unfinished stubs, Nightscout secrets in source, and inline mmol/L conversion factors. Pushes and pull requests also run Semgrep's public default rule set, counting only new findings.</td><td>Checks; commits, pushes and pull requests where the kit is committed to the project</td></tr>
+    <tr><td>Trivy 0.76.2</td><td>Known vulnerabilities rated high or critical in the dependency lockfiles, along with secrets and misconfigured files at the same severity. Vulnerabilities already present on installation can be listed as accepted, so that only new ones fail. On pull requests it also writes a software bill of materials.</td><td>Pushes and pull requests where the kit is committed to the project</td></tr>
+  </tbody>
+</table></figure>
+<p>"Checks" means the step the assistant runs before recording a review (<code>review.py checks</code>). The commit hook then confirms that a valid record exists and runs the secret scan again. Where the kit is committed to a project, the commit hook also runs the linters and the kit's Semgrep rules. Ruff, Biome, ktlint and SwiftFormat 0.64.7 can also format newly added files on request; formatting is never applied automatically.</p>
+<p>The linter for a language is needed only where you commit code in that language: Kotlin for AndroidAPS, Swift for Trio, JavaScript for Nightscout, Python for analysis code. A missing linter fails the checks, with a message naming the tool. A high-tier record is then refused, and where the kit is committed to the project the commit itself is refused.</p>
+
+<h3>The kit's own scripts</h3>
+<figure class="wp-block-table"><table>
+  <thead><tr><th>Script</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>review.py</code></td><td>Runs the checks, writes and verifies the records, adds the commit-message lines, and provides <code>status</code>, <code>signoff</code> and a pull-request summary.</td></tr>
+    <tr><td><code>lintgate.py</code></td><td>Runs each linter on the before and after versions of the changed files and fails only on a rise in a rule's count.</td></tr>
+    <tr><td><code>global.py</code></td><td>Switches the kit on or off for the whole machine. For each assistant named, it installs the guard and adds the review steps to that assistant's instructions.</td></tr>
+    <tr><td><code>guard.py</code></td><td>Called by the assistant before each shell command or file edit; refuses the commands described below.</td></tr>
+    <tr><td><code>install.py</code></td><td>Commits the kit into one project, with its own hooks, configuration and pull-request workflow.</td></tr>
+  </tbody>
+</table></figure>
+
+<h3>Added when the kit is committed to a project</h3>
+<figure class="wp-block-table"><table>
+  <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td>lefthook 2.2.2</td><td>Runs the project's hooks from a <code>lefthook.yml</code> kept in the repository, so everyone who clones it gets the same checks.</td></tr>
+    <tr><td>GitHub Actions workflow</td><td>Reruns the linters, Semgrep, Trivy and TruffleHog on each pull request, and checks the review records using the base branch's copy of the rules, so a pull request cannot loosen the checks it is judged by.</td></tr>
+    <tr><td>PR-Agent 0.49.0</td><td>An AI review posted as comments on each pull request. Advisory, and it runs only once an <code>ANTHROPIC_API_KEY</code> secret is set.</td></tr>
+    <tr><td>SonarQube</td><td>Optional quality and coverage dashboard. Off until a server address and token are configured and the repository variable <code>SONAR_ENABLED</code> is set to <code>true</code>.</td></tr>
+    <tr><td>CodeGraphContext 0.6.13</td><td>Gives the assistant a map of which functions call which, through MCP, so that it can find an existing helper before writing a new one.</td></tr>
+  </tbody>
+</table></figure>
+
+<h2>Code quality and over-long code</h2>
+<p>Model-written code tends to be longer than the task needs. The kit treats this in two ways. Automatically, detekt, SwiftLint and Ruff flag functions that are too long or too complex, as listed above; these settings apply where a project has no linter configuration of its own, and a project's own rules take precedence. JavaScript has no automatic size check.</p>
+<p>A linter can count lines and branches, but it cannot tell whether code was needed. That judgement is given to the second-model review, which is told to treat an oversized change as an important finding to be fixed before commit. Its instructions name four forms: an abstraction or option nobody asked for, a rewrite of a helper the project already has, dead or speculative code, and handling for cases that cannot happen.</p>
+
+<h2>A guard against skipping the checks</h2>
+<p>Git lets anyone skip its hooks, with <code>git commit --no-verify</code> for example. The kit therefore gives each supported assistant a guard that reads every shell command and file edit before it runs. It refuses <code>--no-verify</code> and its abbreviations, <code>git commit -n</code>, changes to where git looks for hooks, switching off the hook runner, and opting a project out. It also refuses hand edits to a review record and any sign-off entered by the assistant, since a sign-off belongs to the person who read the code. The refusal tells the assistant to run the review steps instead.</p>
+<figure class="wp-block-table"><table>
+  <thead><tr><th>Assistant</th><th>Where the guard is added</th><th>Instructions file</th></tr></thead>
+  <tbody>
+    <tr><td>Claude Code</td><td><code>~/.claude/settings.json</code></td><td><code>~/.claude/CLAUDE.md</code></td></tr>
+    <tr><td>Codex</td><td><code>~/.codex/hooks.json</code>; runs only after you approve it under <code>/hooks</code></td><td><code>~/.codex/AGENTS.md</code></td></tr>
+    <tr><td>Gemini CLI</td><td><code>~/.gemini/settings.json</code></td><td><code>~/.gemini/GEMINI.md</code></td></tr>
+  </tbody>
+</table></figure>
+<p>The guard reads the command as written. A script saved to disk and then run, or a deliberately obscured command, gets past it. Codex's documentation also says that some of its specialised tool paths skip hooks. The guard therefore stops an assistant drifting round the checks, and the record check at commit and push remains the control that binds. Other assistants are bound by their instructions and by those checks.</p>
+
+<h2>Setting it up on your machine</h2>
+<p>The steps are the same on macOS, Linux and Windows. You need Python 3.11 or newer and Git.</p>
+
+<h3>1. Install the tools</h3>
+<figure class="wp-block-table"><table>
+  <thead><tr><th>System</th><th>Command</th></tr></thead>
+  <tbody>
+    <tr><td>macOS</td><td><code>brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff</code></td></tr>
+    <tr><td>Linux</td><td>Install Homebrew from brew.sh, then the macOS line without <code>swiftlint swiftformat</code>.</td></tr>
+    <tr><td>Windows</td><td>Install Git for Windows and Node.js. Install Python too, ticking "Add python.exe to PATH" in the Python installer. Then in Git Bash: <code>py -m pip install ruff mypy semgrep</code> and <code>npm install -g @biomejs/biome lefthook</code>, and check with <code>ruff --version &amp;&amp; semgrep --version</code>. Download <code>trufflehog</code> from its GitHub releases page and put it on your PATH. For Kotlin, also download <code>ktlint</code> and <code>detekt-cli</code> from their releases pages. Trivy is needed only for projects the kit is committed to.</td></tr>
+  </tbody>
+</table></figure>
+
+<h3>2. Put the kit in your home folder</h3>
+<p>Save the kit folder you were sent as <code>os-aid-review-kit</code> in your home folder (<code>~/os-aid-review-kit</code>, or <code>C:\Users\you\os-aid-review-kit</code> on Windows).</p>
+
+<h3>3. Switch it on</h3>
+<p>In a terminal (Git Bash on Windows), naming only the assistants you use:</p>
+<pre><code>$ python3 ~/os-aid-review-kit/kit/global.py on --claude --codex --gemini</code></pre>
+<p>On Windows, type <code>py</code> in place of <code>python3</code>. From then on every commit and push on the machine goes through the checks. Each named assistant gets the guard, and the review steps are added to its instructions file without touching what is already there. Codex users then open Codex once, type <code>/hooks</code> and trust the review guard.</p>
+<p>Nothing is added to your projects. The records are kept in <code>~/.review-ledger</code>, which is a git repository of its own. Hooks your projects already use keep running, and merging from upstream needs no record for files your fork never changed. A project that sets its own hooks location, as husky does, is outside the checks; <code>global.py on --scan ~</code> lists any. <code>global.py off</code> removes the hooks and the guard again.</p>
+<p>To keep the records inside one project instead, so that they travel with its pull requests, run <code>python3 ~/os-aid-review-kit/kit/install.py &lt;project folder&gt; --hooks</code> and commit what it adds.</p>
+
+<h3>4. Check that it works</h3>
+<p>Make a small change and try to commit it without a review. The commit should be refused. Try the same from any graphical Git program you use, since some bundle their own copy of Git that may not run the hooks. On Windows, Git inside WSL is a separate installation and needs the kit switched on there as well.</p>
+
+<h2>What it does and does not establish</h2>
+<p>A record states that a review took place and what it covered. Its value depends on the reviewer, and a second model session misses things a person would catch. The kit makes the review visible and checkable, and tells the person reading safety-critical code which files to read and what has already been run against them, which leaves that reading to be done.</p>
+<p>The kit has 123 automated tests, which run the Python, JavaScript and secret-scanning tools on Linux, macOS and Windows each time the kit changes. On 20 November 2026 all 123 passed on Linux and macOS; on Windows 119 passed and 4 were skipped because they test behaviour that does not exist there. The Kotlin and Swift linters are not part of that run. Repeated rounds of review by separate model sessions found defects in the kit, and each one now has a test that fails if it returns. The kit has gated AndroidAPS, Trio and Nightscout work on one developer's Mac since 20 November 2026. Linux and Windows are covered by the automated tests and have not yet been used for day-to-day work, and the Gemini CLI guard has been tested against its documented interface without a live session.</p>
+
+<p><em>Questions and problems to Tim Street. 20 November 2026.</em></p>
