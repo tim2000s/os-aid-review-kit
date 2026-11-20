@@ -22,6 +22,9 @@ import shutil
 import subprocess
 import sys
 
+# git and the tools print UTF-8; Windows would otherwise decode their output as cp1252
+UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 T = os.path.join(KIT, "templates")
 
@@ -41,7 +44,7 @@ GITIGNORE = [".env", ".env.*", "*.pem", "google-services.json", "GoogleService-I
 
 
 def audit(root):
-    files = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, text=True,
+    files = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, **UTF8,
                            check=True).stdout.split("\0")
     counts = {lang: sum(f.endswith(ext) for f in files) for lang, ext in EXTENSIONS.items()}
     markers = {lang: [m for m in ms if os.path.exists(os.path.join(root, m))] for lang, ms in MARKERS.items()}
@@ -59,7 +62,7 @@ def audit(root):
                            "ruff.toml", ".ruff.toml", "biome.json", ".editorconfig")
                if os.path.exists(os.path.join(root, p))]
     pyproject = os.path.join(root, "pyproject.toml")
-    if os.path.exists(pyproject) and "[tool.ruff" in open(pyproject).read():
+    if os.path.exists(pyproject) and "[tool.ruff" in open(pyproject, encoding="utf-8").read():
         linters.append("pyproject.toml [tool.ruff]")
     return {"languages": langs, "counts": counts, "markers": markers, "ci": ci, "hooks": hooks, "linters": linters}
 
@@ -163,9 +166,9 @@ def sonar_properties(root, langs, audit_result):
 
 def accepted_cves(root):
     """Pre-existing findings are recorded, not fixed here and not allowed to block unrelated work."""
-    p = subprocess.run(["trivy", "fs", "--quiet", "--format", "json", "--exit-code", "0",
+    p = subprocess.run([shutil.which("trivy") or "trivy", "fs", "--quiet", "--format", "json", "--exit-code", "0",
                         "--severity", "HIGH,CRITICAL", "--scanners", "vuln", "--ignorefile", "", "."],
-                       cwd=root, capture_output=True, text=True)
+                       cwd=root, capture_output=True, **UTF8)
     if p.returncode != 0 or not p.stdout.strip():
         raise SystemExit(f"install: trivy failed, so no CVE list was written: {p.stderr.strip()[:400]}")
     vulns = sorted({(v["VulnerabilityID"], v["PkgName"], v["Severity"])
@@ -187,13 +190,13 @@ class Writer:
         """Write a file; an existing one is left alone unless the kit owns it (owned=True)."""
         path = os.path.join(self.root, rel)
         if os.path.exists(path):
-            if open(path).read() == content:
+            if open(path, encoding="utf-8").read() == content:
                 self.unchanged.append(rel)
                 return
             if owned:
                 self.updated.append(rel)
                 if not self.dry:
-                    with open(path, "w", newline="\n") as f:
+                    with open(path, "w", newline="\n", encoding="utf-8") as f:
                         f.write(content)
                 return
             rel_p = rel + ".kit-proposed"
@@ -203,26 +206,26 @@ class Writer:
             self.created.append(rel)
         if not self.dry:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "w", newline="\n") as f:
+            with open(path, "w", newline="\n", encoding="utf-8") as f:
                 f.write(content)
 
     def copy(self, rel, src, owned=False):
-        self.put(rel, open(src).read(), owned)
+        self.put(rel, open(src, encoding="utf-8").read(), owned)
 
     def append_lines(self, rel, lines):
         path = os.path.join(self.root, rel)
-        have = open(path).read().splitlines() if os.path.exists(path) else []
+        have = open(path, encoding="utf-8").read().splitlines() if os.path.exists(path) else []
         add = [x for x in lines if x not in have]
         if add:
             self.updated.append(f"{rel} (+{len(add)} lines)")
             if not self.dry:
-                with open(path, "a", newline="\n") as f:
+                with open(path, "a", newline="\n", encoding="utf-8") as f:
                     f.write(("\n" if have and have[-1] != "" else "") + "# review kit\n" + "\n".join(add) + "\n")
 
     def block(self, rel, block):
         """Insert or refresh the kit's marked block in an instructions file."""
         path = os.path.join(self.root, rel)
-        text = open(path).read() if os.path.exists(path) else ""
+        text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
         start, end = "<!-- review-kit:start", "<!-- review-kit:end -->"
         if start in text and end not in text:
             raise SystemExit(f"install: {rel} has the kit's start marker but no end marker; fix it by hand")
@@ -233,11 +236,13 @@ class Writer:
         if new != text:
             (self.updated if text else self.created).append(rel)
             if not self.dry:
-                with open(path, "w", newline="\n") as f:
+                with open(path, "w", newline="\n", encoding="utf-8") as f:
                     f.write(new)
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # a pipe on Windows otherwise takes the code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("target")
     ap.add_argument("--preset", default="auto", choices=["auto", "default", "androidaps", "trio", "nightscout"])
@@ -253,7 +258,7 @@ def main(argv=None):
     au = audit(root)
     langs = au["languages"]
     preset = detect_preset(root) if a.preset == "auto" else a.preset
-    tiers = open(os.path.join(T, "tiers", f"{preset}.toml")).read()
+    tiers = open(os.path.join(T, "tiers", f"{preset}.toml"), encoding="utf-8").read()
     mode = re.search(r'^mode = "(\w+)"', tiers, re.M).group(1)
     w = Writer(root, a.dry_run)
 
@@ -269,7 +274,7 @@ def main(argv=None):
             w.copy("ruff.toml", os.path.join(T, "ruff.toml"))
         w.copy("mypy.ini", os.path.join(T, "mypy.ini"))
     if "javascript" in langs:
-        biome = json.load(open(os.path.join(T, "biome.json")))
+        biome = json.load(open(os.path.join(T, "biome.json"), encoding="utf-8"))
         if any("prettier" in x for x in au["linters"]):
             biome["formatter"]["enabled"] = False  # the repository's own formatter stays in charge
         if any("eslint" in x or "prettier" in x for x in au["linters"]):
@@ -305,28 +310,29 @@ def main(argv=None):
         print("install: GitLab CI found; the kit ships a GitHub workflow only, so CI is left unchanged")
     else:
         w.put(".github/workflows/quality-gate.yml",
-              strip_languages(open(os.path.join(T, ".github", "workflows", "quality-gate.yml")).read(), langs)
+              strip_languages(open(os.path.join(T, ".github", "workflows", "quality-gate.yml"),
+                                   encoding="utf-8").read(), langs)
               .replace("__KIT_LANGS_LINUX__", "python,javascript,kotlin" + ("" if "swift" in langs else ",swift")))
     w.copy(".pr_agent.toml", os.path.join(T, ".pr_agent.toml"))
     w.put("sonar-project.properties", sonar_properties(root, langs, au))
 
     # Phase 6: MCP and agent instructions
     mcp_path = os.path.join(root, ".mcp.json")
-    mcp = json.load(open(mcp_path)) if os.path.exists(mcp_path) else {"mcpServers": {}}
+    mcp = json.load(open(mcp_path, encoding="utf-8")) if os.path.exists(mcp_path) else {"mcpServers": {}}
     if "codegraphcontext" not in mcp.setdefault("mcpServers", {}):
-        template = json.load(open(os.path.join(T, "mcp.json")))
+        template = json.load(open(os.path.join(T, "mcp.json"), encoding="utf-8"))
         mcp["mcpServers"]["codegraphcontext"] = template["mcpServers"]["codegraphcontext"]
         (w.updated if os.path.exists(mcp_path) else w.created).append(".mcp.json")
         if not a.dry_run:
-            with open(mcp_path, "w") as f:
+            with open(mcp_path, "w", encoding="utf-8") as f:
                 json.dump(mcp, f, indent=2)
                 f.write("\n")
-    block = open(os.path.join(T, "AGENTS-block.md")).read()
+    block = open(os.path.join(T, "AGENTS-block.md"), encoding="utf-8").read()
     w.block("AGENTS.md", block)
     claude = os.path.join(root, "CLAUDE.md")
     if not os.path.exists(claude):
         w.put("CLAUDE.md", "@AGENTS.md\n")
-    elif not os.path.islink(claude) and "@AGENTS.md" not in open(claude).read():
+    elif not os.path.islink(claude) and "@AGENTS.md" not in open(claude, encoding="utf-8").read():
         w.block("CLAUDE.md", block)
 
     # The review records and their tools
@@ -362,12 +368,12 @@ def main(argv=None):
         elif other:
             hooks_note = f"not installed: the repository already uses {', '.join(other)}; merge lefthook.yml by hand"
         elif os.path.normcase(os.path.abspath(subprocess.run(
-                ["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True, text=True
+                ["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True, **UTF8
                 ).stdout.strip() or "-")) == os.path.normcase(os.path.join(KIT, "global-hooks")):
             # lefthook refuses a global hooks path; the kit's dispatcher runs lefthook itself
             hooks_note = "covered by the kit's global hooks (kit/global.py on)"
-        elif shutil.which("lefthook"):
-            p = subprocess.run(["lefthook", "install"], cwd=root, capture_output=True, text=True)
+        elif lefthook := shutil.which("lefthook"):
+            p = subprocess.run([lefthook, "install"], cwd=root, capture_output=True, **UTF8)
             hooks_note = "installed" if p.returncode == 0 else f"lefthook install failed: {p.stderr.strip()}"
         else:
             hooks_note = "not installed: lefthook is missing"

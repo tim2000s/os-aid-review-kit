@@ -48,6 +48,9 @@ import subprocess
 import sys
 import tomllib
 
+# git and the tools print UTF-8; Windows would otherwise decode their output as cp1252
+UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
 DIR = ".review"
 RECORDS = DIR + "/records"  # git's separator, since installed-mode records are compared with git's paths
 LAST_CHECKS = DIR + "/.last-checks.json"
@@ -69,7 +72,7 @@ EXEMPT = [".review/records/*.md", ".review/records/.gitkeep", ".review/README.md
 
 
 def git(*args, check=True):
-    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True)
+    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, **UTF8)
     if check and p.returncode != 0:
         raise SystemExit(f"review: git {' '.join(args)} failed: {p.stderr.strip()}")
     return p.stdout.strip()
@@ -105,8 +108,9 @@ def enter_ambient(toplevel):
         sys.path.insert(0, os.path.join(KIT, "kit"))
         from install import detect_preset
         os.makedirs(DIR, exist_ok=True)
-        with open(os.path.join(KIT, "templates", "tiers", f"{detect_preset(toplevel)}.toml")) as src, \
-                open(tiers, "w") as dst:
+        preset = os.path.join(KIT, "templates", "tiers", f"{detect_preset(toplevel)}.toml")
+        with open(preset, encoding="utf-8") as src, \
+                open(tiers, "w", encoding="utf-8") as dst:
             dst.write(f"# Ambient-mode tiers for {toplevel}, copied from the kit's preset; edit freely.\n" + src.read())
     # lintgate reads the exempt list from here, and lints with the kit's configs where the repo has none
     os.environ["REVIEW_TIERS"] = tiers
@@ -118,7 +122,7 @@ def ledger_commit(path, message):
     if not os.path.isdir(os.path.join(LEDGER, ".git")):
         git("init", "-q", LEDGER)
         git("-C", LEDGER, "config", "review.ambient", "false")
-        with open(os.path.join(LEDGER, ".gitignore"), "w") as f:
+        with open(os.path.join(LEDGER, ".gitignore"), "w", encoding="utf-8") as f:
             f.write(".last-checks.json\n")
     git("-C", LEDGER, "add", "-A")  # the whole ledger, so a directory moved by the layout change is kept
     git("-C", LEDGER, "commit", "-q", "--no-verify", "-m", message)
@@ -208,7 +212,7 @@ def load_records():
     if os.path.isdir(RECORDS):
         for name in sorted(os.listdir(RECORDS)):
             if name.endswith(".md"):
-                with open(os.path.join(RECORDS, name)) as f:
+                with open(os.path.join(RECORDS, name), encoding="utf-8") as f:
                     r = parse_record(f.read())
                 if r:
                     recs.append(r)
@@ -278,7 +282,7 @@ def render(rec):
 def write(rec):
     os.makedirs(RECORDS, exist_ok=True)
     path = os.path.join(RECORDS, f"{rec['id']}.md")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(render(rec))
     if AMBIENT:
         ledger_commit(path, f"{rec['id']} {rec['human_review']['status']}: {rec.get('repo', '')}")
@@ -379,14 +383,14 @@ def cmd_checks(a):
         try:
             if isinstance(command, list):
                 command = [shutil.which(command[0]) or command[0], *command[1:]]  # finds .cmd shims on Windows
-            p = subprocess.run(command, capture_output=True, text=True, shell=isinstance(command, str))  # noqa: S602 nosemgrep
+            p = subprocess.run(command, capture_output=True, **UTF8, shell=isinstance(command, str))  # noqa: S602 nosemgrep
             result = "pass" if p.returncode == 0 else "fail"
             tail = (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
             results.append({"name": name, "result": result, "detail": tail[0][:200].replace("|", "/")})
         except FileNotFoundError:
             results.append({"name": name, "result": "not run", "detail": f"{command[0]} is not installed"})
         print(f"{results[-1]['result']:8} {name}  {results[-1]['detail']}")
-    with open(LAST_CHECKS, "w") as f:
+    with open(LAST_CHECKS, "w", encoding="utf-8") as f:
         json.dump({"base": a.base, "blobs": blobs, "checks": results}, f, indent=1)
     return 1 if any(r["result"] != "pass" for r in results) else 0
 
@@ -397,14 +401,14 @@ def cmd_record(a):
     if not files:
         raise SystemExit("review: nothing in this change needs a record")
     try:
-        with open(LAST_CHECKS) as f:
+        with open(LAST_CHECKS, encoding="utf-8") as f:
             last = json.load(f)
     except FileNotFoundError:
         raise SystemExit("review: run `review.py checks` on this change first") from None
     if last["blobs"] != blobs or last.get("base") != a.base:
         raise SystemExit("review: the files changed after `review.py checks` ran, or it ran on a different "
                          "range; run it again with the same arguments")
-    with open(a.findings) if a.findings else open(os.devnull) as fh:
+    with open(a.findings, encoding="utf-8") if a.findings else open(os.devnull, encoding="utf-8") as fh:
         findings = json.loads(fh.read() or "[]")
     for f in findings:
         if f.get("label") not in ("important", "nit", "pre-existing") or not f.get("disposition"):
@@ -419,7 +423,7 @@ def cmd_record(a):
     if tier == "high" and not a.way_back:
         raise SystemExit("review: a high-tier change needs --way-back (how to undo it once used)")
     now = datetime.datetime.now(datetime.UTC)
-    with open(a.explanation) as fh:
+    with open(a.explanation, encoding="utf-8") as fh:
         explanation = fh.read()
     rec = {
         "id": now.strftime("%Y%m%d-%H%M%S") + "-" + git("write-tree")[:7],
@@ -582,7 +586,7 @@ def status_all():
     for d, _, names in sorted(os.walk(root)):
         for name in sorted(names):
             if d.endswith(os.sep + "records") and name.endswith(".md"):
-                with open(os.path.join(d, name)) as f:
+                with open(os.path.join(d, name), encoding="utf-8") as f:
                     r = parse_record(f.read())
                 if r and r.get("human_review", {}).get("status") == "pending":
                     n += 1
@@ -665,15 +669,17 @@ def cmd_trailers(a):
     if os.environ.get("REVIEW_SKIP"):
         lines.append(f"Review-Skipped: {os.environ['REVIEW_SKIP']}")
     if lines:
-        with open(a.msgfile) as f:
+        with open(a.msgfile, encoding="utf-8") as f:
             msg = f.read()
         lines = [line for line in lines if line not in msg]
         if lines:
-            with open(a.msgfile, "w") as f:
+            with open(a.msgfile, "w", encoding="utf-8") as f:
                 f.write(msg.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n")
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # a pipe on Windows otherwise takes the code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("tier"); s.add_argument("--base")

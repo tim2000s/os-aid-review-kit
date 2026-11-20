@@ -190,8 +190,10 @@ def reason(tool, data):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # a pipe on Windows otherwise takes the code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        event = json.load(sys.stdin)
+        event = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace"))  # not the Windows code page
         why = reason(event.get("tool_name", ""), event.get("tool_input") or {})
     except Exception as e:  # noqa: BLE001 - any failure must block, since only exit 2 blocks
         print(f"review guard: could not check this call ({e}), so it is refused", file=sys.stderr)

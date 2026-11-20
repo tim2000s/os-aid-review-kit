@@ -107,7 +107,7 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (107
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (108
 tests; the tests for each behaviour were run against a deliberately broken version of it and failed
 there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.

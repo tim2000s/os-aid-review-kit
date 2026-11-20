@@ -20,6 +20,9 @@ import os
 import subprocess
 import sys
 
+# git and the tools print UTF-8; Windows would otherwise decode their output as cp1252
+UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOKS = os.path.join(KIT, "global-hooks")
 SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
@@ -51,11 +54,13 @@ def claude_guard(add):
 
 
 def current():
-    p = subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True, text=True)
+    p = subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True, **UTF8)
     return p.stdout.strip() or None
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # a pipe on Windows otherwise takes the code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("action", choices=["on", "off", "status"])
     ap.add_argument("--opt-out", nargs="*", default=[])
@@ -91,7 +96,7 @@ def main(argv=None):
         for d, dirs, _ in os.walk(top):
             if ".git" in dirs or os.path.isfile(os.path.join(d, ".git")):
                 p = subprocess.run(
-                    ["git", "-C", d, "config", "--local", "--get", "core.hooksPath"], capture_output=True, text=True
+                    ["git", "-C", d, "config", "--local", "--get", "core.hooksPath"], capture_output=True, **UTF8
                 )
                 if p.stdout.strip():
                     print(f"global: not covered, sets its own core.hooksPath ({p.stdout.strip()}): {d}")

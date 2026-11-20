@@ -30,6 +30,9 @@ import tempfile
 import tomllib
 from urllib.parse import unquote
 
+# git and the tools print UTF-8; Windows would otherwise decode their output as cp1252
+UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
 CONFIG_FILES = ["pyproject.toml", "ruff.toml", ".ruff.toml", "biome.json", "biome.jsonc",
                 "detekt.yml", "config/detekt/detekt.yml", ".editorconfig", ".swiftlint.yml", ".gitignore"]
 DETEKT_CONFIGS = ("detekt.yml", "config/detekt/detekt.yml")
@@ -61,10 +64,10 @@ def detekt(files, root):
     if cfg:
         cmd += ["--config", cfg, "--build-upon-default-config"]
     cmd[0] = need(cmd[0])
-    p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    p = subprocess.run(cmd, cwd=root, capture_output=True, **UTF8)
     if p.returncode not in (0, 2) or not os.path.exists(out):  # detekt exits 2 when it found issues
         raise LinterFailed(f"detekt failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:400]}")
-    with open(out) as f:
+    with open(out, encoding="utf-8") as f:
         return parse_sarif(f.read(), root)
 
 
@@ -107,7 +110,7 @@ def run_sarif(cmd, root, findings_rc=()):
     """Run a linter that prints SARIF. Exit 0, or a code the tool uses for 'found issues', with
     parseable output counts; anything else (including silence with a failing code) is a failure."""
     cmd = [need(cmd[0]), *cmd[1:]]
-    p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    p = subprocess.run(cmd, cwd=root, capture_output=True, **UTF8)
     if p.returncode not in (0, *findings_rc) or (p.returncode != 0 and not p.stdout.strip()):
         raise LinterFailed(f"{cmd[0]} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:400]}")
     if not p.stdout.strip():
@@ -145,7 +148,7 @@ def parse_sarif(text, root):
 
 
 def git(*args, check=True):
-    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True)
+    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, **UTF8)
     if check and p.returncode != 0:
         raise SystemExit(f"lintgate: git {' '.join(args)} failed: {p.stderr.strip()}")
     return p.stdout
@@ -248,6 +251,8 @@ def fix_added(files):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # a pipe on Windows otherwise takes the code page
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--staged", action="store_true")
@@ -312,7 +317,7 @@ def main(argv=None):
             extra = "" if f["path"] in added else f" ({before_n[k]} before, {after_n[k]} after)"
             print(f"{f['path']}:{f['line']}: [{f['tool']} {f['rule']}] {f['message']}{extra}")
     if a.json:
-        with open(a.json, "w") as fh:
+        with open(a.json, "w", encoding="utf-8") as fh:
             json.dump({"files": paths, "skipped": skipped, "mode": a.mode, "new_findings": found}, fh, indent=1)
     if found:
         print(f"lintgate: {len(found)} finding(s) introduced by this change", file=sys.stderr)

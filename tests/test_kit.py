@@ -7,12 +7,18 @@ import sys
 
 import pytest
 
+# git and the tools print UTF-8; Windows would otherwise decode their output as cp1252
+UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
 
 def sh(cwd, *cmd, check=True, env=None):
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env={**os.environ, **(env or {})})
+    # resolving the program finds Windows .cmd shims (npm's lefthook and biome); output is read as UTF-8
+    cmd = (shutil.which(cmd[0]) or cmd[0], *cmd[1:])
+    p = subprocess.run(cmd, cwd=cwd, capture_output=True, **UTF8,
+                       env={**os.environ, **(env or {})})
     if check and p.returncode != 0:
         raise AssertionError(f"{cmd} failed ({p.returncode}):\n{p.stdout}\n{p.stderr}")
     return p
@@ -291,10 +297,10 @@ def test_check_push_checks_the_pushed_ref_not_head(repo):
     sh(repo, "git", "checkout", "-q", "main")
     line = f"refs/heads/evil {evil} refs/heads/evil {main}\n"
     p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
-                       capture_output=True, text=True)
+                       capture_output=True, **UTF8)
     assert p.returncode == 1 and "app.py (in refs/heads/evil)" in p.stdout
     ok = f"refs/heads/main {main} refs/heads/main {main}\n"
-    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=ok, capture_output=True, text=True)
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=ok, capture_output=True, **UTF8)
     assert p.returncode == 0
 
 
@@ -377,7 +383,7 @@ def test_first_push_measures_from_nothing(repo):
     tip = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
     line = f"refs/heads/main {tip} refs/heads/main {'0' * 40}\n"
     p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
-                       capture_output=True, text=True)
+                       capture_output=True, **UTF8)
     assert p.returncode == 1 and "unreviewed: app.py" in p.stdout
     review(repo, "checks", "--base", ":root")
     (repo / ".review" / "exp.txt").write_text("The repository as first committed.\n")
@@ -388,7 +394,7 @@ def test_first_push_measures_from_nothing(repo):
     tip = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
     line = f"refs/heads/main {tip} refs/heads/main {'0' * 40}\n"
     p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
-                       capture_output=True, text=True)
+                       capture_output=True, **UTF8)
     assert p.returncode == 0, p.stdout + p.stderr
 
 
@@ -431,7 +437,7 @@ def plain(tmp_path):
 
 
 def ambient(r, *args, env=None, stdin=None):
-    p = subprocess.run([PY, os.path.join(KIT, "kit", "review.py"), *args], cwd=r, capture_output=True, text=True,
+    p = subprocess.run([PY, os.path.join(KIT, "kit", "review.py"), *args], cwd=r, capture_output=True, **UTF8,
                        input=stdin, env={**os.environ, **(env or {})})
     return p
 
@@ -684,7 +690,7 @@ GUARD = os.path.join(KIT, "kit", "guard.py")
 
 def guard(tool, **tool_input):
     event = json.dumps({"tool_name": tool, "tool_input": tool_input})
-    return subprocess.run([PY, GUARD], input=event, capture_output=True, text=True).returncode
+    return subprocess.run([PY, GUARD], input=event, capture_output=True, **UTF8).returncode
 
 
 @pytest.mark.parametrize("command", [
@@ -729,10 +735,10 @@ def test_guard_protects_records_from_hand_edits():
     assert guard("Edit", file_path="/r/.review/records/20261120-1.md") == 2
     assert guard("Write", file_path="C:\\Users\\t\\.review-ledger\\repos\\x\\records\\a.md") == 2
     assert guard("Edit", file_path="/r/app.py") == 0
-    assert subprocess.run([PY, GUARD], input="not json", capture_output=True, text=True).returncode == 2
+    assert subprocess.run([PY, GUARD], input="not json", capture_output=True, **UTF8).returncode == 2
     assert guard("Bash", command=None) == 0 and guard("Edit", file_path="/r/.git/config") == 2
     bad = json.dumps({"tool_name": "Bash", "tool_input": "git commit --no-verify"})
-    assert subprocess.run([PY, GUARD], input=bad, capture_output=True, text=True).returncode == 2
+    assert subprocess.run([PY, GUARD], input=bad, capture_output=True, **UTF8).returncode == 2
 
 
 def test_global_on_adds_the_guard_to_claude_settings_and_off_removes_it(tmp_path):
@@ -827,3 +833,14 @@ def test_removing_a_ruff_config_does_not_make_inherited_complexity_new(plain):
     sh(plain, "git", "add", ".")
     p = ambient(plain, "checks")
     assert "pass     lint (new findings)" in p.stdout, p.stdout
+
+
+def test_trailers_keep_a_non_ascii_commit_message_intact(repo):
+    stage_change(repo)
+    review(repo, "checks")
+    record(repo)
+    msg = repo / "msg.txt"
+    msg.write_bytes("Café ≥ 3.9 mmol/L\n".encode())
+    review(repo, "trailers", str(msg))
+    text = msg.read_bytes().decode("utf-8")
+    assert text.startswith("Café ≥ 3.9 mmol/L") and "Review-Record:" in text
