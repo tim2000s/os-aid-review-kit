@@ -18,6 +18,9 @@ def sh(cwd, *cmd, check=True, env=None):
     return p
 
 
+NO_SYMLINKS = pytest.mark.skipif(sys.platform == "win32", reason="symlinks need extra privilege on Windows")
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     """Keep the machine's global git config (which may point at the kit's global hooks) and its review
@@ -467,7 +470,7 @@ def test_ambient_secret_scan_runs_at_commit(plain):
 
 def test_global_hooks_run_the_repositorys_own_hook_and_honour_opt_out(plain):
     own = plain / ".git" / "hooks" / "pre-commit"
-    own.write_text("#!/bin/sh\necho own-hook-ran; exit 1\n")
+    own.write_text("#!/bin/sh\necho own-hook-ran; exit 1\n", newline="\n")
     own.chmod(0o755)
     sh(plain, "git", "config", "review.ambient", "false")
     stage_change(plain)
@@ -501,6 +504,7 @@ def test_ambient_lints_with_the_kits_config_where_the_repo_has_none(plain):
     assert "fail     lint (new findings)" in p.stdout, p.stdout
 
 
+@NO_SYMLINKS
 @pytest.mark.skipif(not (shutil.which("semgrep") and shutil.which("trufflehog")), reason="scanners not installed")
 def test_checks_skip_symlinks(repo):
     (repo / "link.py").symlink_to("app.py")
@@ -555,7 +559,7 @@ def test_kit_repo_with_another_hook_framework_still_runs_the_gate(repo, tmp_path
         pytest.skip("lefthook not installed")
     sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))
     own = repo / ".git" / "hooks" / "pre-commit"
-    own.write_text("#!/bin/sh\nexit 0\n")  # as the pre-commit framework would leave it
+    own.write_text("#!/bin/sh\nexit 0\n", newline="\n")  # as the pre-commit framework would leave it
     own.chmod(0o755)
     stage_change(repo)
     p = sh(repo, "git", "commit", "-qm", "c", check=False)
@@ -564,8 +568,9 @@ def test_kit_repo_with_another_hook_framework_still_runs_the_gate(repo, tmp_path
 
 def test_other_hooks_and_push_input_reach_the_repositorys_own_hooks(plain, tmp_path):
     hooks = plain / ".git" / "hooks"
-    (hooks / "post-checkout").write_text("#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/checkout-ran\"\n")
-    (hooks / "pre-push").write_text("#!/bin/sh\ncat > \"$(git rev-parse --git-dir)/push-input\"\n")
+    (hooks / "post-checkout").write_text("#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/checkout-ran\"\n",
+                                         newline="\n")
+    (hooks / "pre-push").write_text("#!/bin/sh\ncat > \"$(git rev-parse --git-dir)/push-input\"\n", newline="\n")
     for h in ("post-checkout", "pre-push"):
         (hooks / h).chmod(0o755)
     sh(plain, "git", "checkout", "-qb", "other")
@@ -606,7 +611,7 @@ def test_kit_repo_whose_lefthook_config_does_not_run_the_kit_is_refused(repo, tm
     sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))
     (repo / "lefthook.yml").write_text("pre-commit:\n  commands:\n    own:\n      run: 'true'\n")
     own = repo / ".git" / "hooks" / "pre-commit"
-    own.write_text("#!/bin/sh\n# lefthook\nexit 0\n")
+    own.write_text("#!/bin/sh\n# lefthook\nexit 0\n", newline="\n")
     own.chmod(0o755)
     stage_change(repo)
     p = sh(repo, "git", "commit", "-qm", "c", check=False)
@@ -659,6 +664,7 @@ def test_command_line_upstream_is_ignored(plain, tmp_path):
     assert ambient(plain, "check", env=env).returncode == 1
 
 
+@NO_SYMLINKS
 def test_status_and_signoff_read_a_symlink_as_git_stores_it(repo):
     (repo / "link.py").symlink_to("app.py")
     sh(repo, "git", "add", "link.py")
@@ -669,3 +675,155 @@ def test_status_and_signoff_read_a_symlink_as_git_stores_it(repo):
     (repo / "link.py").unlink()
     (repo / "link.py").symlink_to("missing.py")  # repointed at nothing after the review
     assert "changed  link.py" in review(repo, "status").stdout
+
+
+# The assistant guard, cross-platform details and the complexity rules.
+
+GUARD = os.path.join(KIT, "kit", "guard.py")
+
+
+def guard(tool, **tool_input):
+    event = json.dumps({"tool_name": tool, "tool_input": tool_input})
+    return subprocess.run([PY, GUARD], input=event, capture_output=True, text=True).returncode
+
+
+@pytest.mark.parametrize("command", [
+    'git commit -m "x" --no-verify', "git commit -nm wip", "git push --no-ver origin main",
+    "LEFTHOOK=0 git commit -m x", "LEFTHOOK=false git commit -m x", "HUSKY=0 git commit -m x",
+    "HOME=/tmp/x git commit -m x", "env -i git commit -m x", "export HOME=/tmp/x",
+    "git config core.hooksPath /tmp", "git -c core.hooksPath=/dev/null commit -m x",
+    'git -c core.hooksPath=/dev/null commit -m "config --get"', "git config review.ambient false",
+    "git config --get review.ambient\ngit config review.ambient false",
+    "python3 ~/os-aid-review-kit/kit/global.py off", "REVIEW_TIERS=/tmp/t.toml git commit -m x",
+    "python3 .review/bin/review.py signoff 20261120-1 --by Tim", "rm .git/hooks/pre-commit",
+    "printf '[review]\\nambient = false\\n' >> .git/config", "sed -i '' 's/pending/approved/' .review/records/a.md",
+    "echo 'pre-commit: {skip: true}' > lefthook-local.yml", "cp /tmp/s.json ~/.claude/settings.json",
+    "cd repo && git commit --no-verify -m x", "(git commit --no-verify -m x)", "{ git commit -n -m x; }",
+    "bash -c 'git commit --no-verify -m x'", "sh -c \"LEFTHOOK=0 git commit -m x\"", "eval git commit --no-verify",
+    'git commit -m "Fix X (closes #3)" --no-verify', 'git commit -m "a; b" --no-verify', 'git commit -m "a & b" -n',
+    'git commit -m "x|y" --no-verify', 'git commit -m "$(printf x)" --no-verify',
+    "git -c alias.c='commit --no-verify' c -m x", "git config alias.ci 'commit -n'", "unset HOME; git commit -m x",
+])
+def test_guard_refuses_ways_round_the_gate(command):
+    assert guard("Bash", command=command) == 2
+
+
+@pytest.mark.parametrize("command", [
+    'git commit -am "fix n"', "git commit -m ok", "git status && git commit -m ok",
+    "git config --global --get core.hooksPath", "python3 .review/bin/review.py status", "git push origin main",
+    'git commit -m "Refuse --no-verify in the guard"', "wget --no-verbose https://example.org/x",
+    "cat .git/hooks/pre-commit", "ls .git/hooks", 'git add kit/review.py && git commit -m "fix signoff"',
+    "git add .review/records/a.md", 'git commit -m "Set core.hooksPath from global.py"',
+    "git commit -F - <<'EOF'\nBlock core.hooksPath and --no-verify\nEOF",
+])
+def test_guard_allows_ordinary_work(command):
+    assert guard("Bash", command=command) == 0
+
+
+def test_guard_reads_powershell_variables():
+    assert guard("PowerShell", command="$env:LEFTHOOK = '0'; git commit -m x") == 2
+    assert guard("PowerShell", command="git commit -m x") == 0
+
+
+def test_guard_protects_records_from_hand_edits():
+    assert guard("Edit", file_path="/r/.review/records/20261120-1.md") == 2
+    assert guard("Write", file_path="C:\\Users\\t\\.review-ledger\\repos\\x\\records\\a.md") == 2
+    assert guard("Edit", file_path="/r/app.py") == 0
+    assert subprocess.run([PY, GUARD], input="not json", capture_output=True, text=True).returncode == 2
+    assert guard("Bash", command=None) == 0 and guard("Edit", file_path="/r/.git/config") == 2
+    bad = json.dumps({"tool_name": "Bash", "tool_input": "git commit --no-verify"})
+    assert subprocess.run([PY, GUARD], input=bad, capture_output=True, text=True).returncode == 2
+
+
+def test_global_on_adds_the_guard_to_claude_settings_and_off_removes_it(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(json.dumps({"model": "x", "hooks": {"Stop": [1]}}))
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    run = [PY, os.path.join(KIT, "kit", "global.py")]
+    for _ in range(2):  # a second run must not add a second entry
+        subprocess.run([*run, "on", "--claude"], env=env, check=True, capture_output=True)
+    s = json.loads((home / ".claude" / "settings.json").read_text())
+    assert s["model"] == "x" and s["hooks"]["Stop"] == [1]
+    assert len(s["hooks"]["PreToolUse"]) == 1 and "guard.py" in json.dumps(s["hooks"]["PreToolUse"])
+    own = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 ~/my/guard.py"}]}
+    s["hooks"]["PreToolUse"].append(own)  # a guard.py of the user's own must survive
+    (home / ".claude" / "settings.json").write_text(json.dumps(s))
+    subprocess.run([*run, "off"], env=env, check=False, capture_output=True)
+    subprocess.run([*run, "on", "--claude"], env=env, check=True, capture_output=True)
+    subprocess.run([*run, "off"], env=env, check=True, capture_output=True)
+    s = json.loads((home / ".claude" / "settings.json").read_text())
+    assert s["hooks"]["PreToolUse"] == [own] and s["model"] == "x"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no executable bit on Windows")
+def test_global_on_restores_the_executable_bit(tmp_path):
+    kit = tmp_path / "kit"
+    shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+    for f in (kit / "global-hooks").iterdir():
+        f.chmod(0o644)  # as an unzip can leave them
+    env = {**os.environ, "HOME": str(tmp_path / "home")}
+    subprocess.run([PY, str(kit / "kit" / "global.py"), "on"], env=env, check=True, capture_output=True)
+    assert all(os.access(f, os.X_OK) for f in (kit / "global-hooks").iterdir())
+
+
+def test_global_hooks_are_plain_files_not_symlinks():
+    hooks = os.path.join(KIT, "global-hooks")
+    names = os.listdir(hooks)
+    assert "pre-commit" in names and "pre-push" in names and "post-checkout" in names
+    assert not any(os.path.islink(os.path.join(hooks, n)) for n in names)
+    for n in names:
+        with open(os.path.join(hooks, n), "rb") as f:
+            assert b"\r\n" not in f.read(), f"{n} has CRLF endings"
+
+
+def test_ledger_directory_stays_inside_the_ledger_for_any_path(tmp_path):
+    sys.path.insert(0, os.path.join(KIT, "kit"))
+    import review
+    review.LEDGER = str(tmp_path / "ledger")
+    outside = os.path.abspath("/opt/src/x")
+    drive = os.path.splitdrive(outside)[0].rstrip(":") or "root"
+    # the one place inside the home folder that would collide if the two kinds were not kept apart
+    inside = os.path.join(os.path.expanduser("~"), "abs", drive, "opt", "src", "x")
+    dirs = [review.ambient_dir(t) for t in (outside, inside)]
+    assert all(d.startswith(str(tmp_path / "ledger")) for d in dirs)
+    assert dirs[0] != dirs[1], "a path outside the home folder must not share a ledger with one inside it"
+
+
+def test_sarif_paths_are_cut_at_the_root_whatever_the_separator():
+    sys.path.insert(0, os.path.join(KIT, "kit"))
+    import lintgate
+    root = "C:\\Users\\runner\\AppData\\Local\\Temp\\tmpab12"
+    doc = {"runs": [{"results": [{"ruleId": "F401", "message": {"text": "unused"}, "locations": [
+        {"physicalLocation": {"artifactLocation": {"uri": "file:///C:/Users/runner/AppData/Local/Temp/tmpab12/src/a%20b.py"},
+                              "region": {"startLine": 3}}}]}]}]}
+    raw = {"ruleId": "F401", "message": {"text": "unused"}, "locations": [{"physicalLocation": {
+        "artifactLocation": {"uri": root + "\\src\\c.py"}, "region": {"startLine": 1}}}]}
+    doc["runs"][0]["results"].append(raw)  # some Windows tools print a bare path with backslashes
+    f, g = lintgate.parse_sarif(json.dumps(doc), root)
+    assert f["path"] == "src/a b.py" and f["line"] == 3 and g["path"] == "src/c.py"
+
+
+def test_ambient_python_gets_complexity_rules_only_without_its_own_ruff_config(plain):
+    branchy = "def f(x):\n" + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(12)) + "    return -1\n"
+    (plain / "branchy.py").write_text(branchy)
+    sh(plain, "git", "add", "branchy.py")
+    p = ambient(plain, "checks")
+    assert "fail     lint (new findings)" in p.stdout, p.stdout
+    (plain / "pyproject.toml").write_text('[tool.ruff.lint]\nselect = ["F"]\n')
+    sh(plain, "git", "add", "pyproject.toml")
+    p = ambient(plain, "checks")
+    assert "pass     lint (new findings)" in p.stdout, p.stdout
+
+
+def test_removing_a_ruff_config_does_not_make_inherited_complexity_new(plain):
+    branchy = "def f(x):\n" + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(12)) + "    return -1\n"
+    (plain / "branchy.py").write_text(branchy)
+    (plain / "pyproject.toml").write_text('[tool.ruff.lint]\nselect = ["F"]\n')
+    sh(plain, "git", "add", ".")
+    sh(plain, "git", "commit", "-qm", "own ruff config", "--no-verify")
+    (plain / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (plain / "branchy.py").write_text(branchy.replace("return -1", "return -2"))
+    sh(plain, "git", "add", ".")
+    p = ambient(plain, "checks")
+    assert "pass     lint (new findings)" in p.stdout, p.stdout

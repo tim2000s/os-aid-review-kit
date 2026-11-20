@@ -43,13 +43,14 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
 
 DIR = ".review"
-RECORDS = os.path.join(DIR, "records")
-LAST_CHECKS = os.path.join(DIR, ".last-checks.json")
+RECORDS = DIR + "/records"  # git's separator, since installed-mode records are compared with git's paths
+LAST_CHECKS = DIR + "/.last-checks.json"
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = os.environ.get("REVIEW_LEDGER") or os.path.expanduser("~/.review-ledger")
 AMBIENT = False
@@ -76,8 +77,14 @@ def git(*args, check=True):
 
 def ambient_dir(toplevel):
     """The ledger directory for a checkout: its path under the home directory, or its absolute path."""
-    home = os.path.expanduser("~")
-    rel = os.path.relpath(toplevel, home) if toplevel.startswith(home + os.sep) else toplevel.lstrip(os.sep)
+    top, home = os.path.abspath(toplevel), os.path.abspath(os.path.expanduser("~"))
+    if os.path.normcase(top).startswith(os.path.normcase(home) + os.sep):
+        rel = os.path.join("home", os.path.relpath(top, home))
+    else:
+        # the drive becomes a directory name rather than being dropped, so C:\\src\\x and D:\\src\\x
+        # stay apart, and a Windows path cannot replace the ledger root in the join
+        drive, tail = os.path.splitdrive(top)
+        rel = os.path.join("abs", drive.rstrip(":").replace("\\", "_").replace("/", "_") or "root", tail.lstrip("\\/"))
     return os.path.join(LEDGER, "repos", rel)
 
 
@@ -85,6 +92,12 @@ def enter_ambient(toplevel):
     global DIR, RECORDS, LAST_CHECKS, AMBIENT
     AMBIENT = True
     DIR = ambient_dir(toplevel)
+    home = os.path.abspath(os.path.expanduser("~"))
+    old = os.path.join(LEDGER, "repos", os.path.relpath(os.path.abspath(toplevel), home))
+    inside = os.path.normcase(os.path.abspath(toplevel)).startswith(os.path.normcase(home) + os.sep)
+    if inside and not os.path.exists(DIR) and os.path.isdir(os.path.join(old, "records")):
+        os.makedirs(os.path.dirname(DIR), exist_ok=True)
+        os.rename(old, DIR)  # the ledger layout before 20 November 2026 had no home/ or abs/ prefix
     RECORDS = os.path.join(DIR, "records")
     LAST_CHECKS = os.path.join(DIR, ".last-checks.json")
     tiers = os.path.join(DIR, "tiers.toml")
@@ -107,7 +120,7 @@ def ledger_commit(path, message):
         git("-C", LEDGER, "config", "review.ambient", "false")
         with open(os.path.join(LEDGER, ".gitignore"), "w") as f:
             f.write(".last-checks.json\n")
-    git("-C", LEDGER, "add", "-A", "--", ".gitignore", os.path.relpath(path, LEDGER))
+    git("-C", LEDGER, "add", "-A")  # the whole ledger, so a directory moved by the layout change is kept
     git("-C", LEDGER, "commit", "-q", "--no-verify", "-m", message)
 
 
@@ -359,11 +372,14 @@ def cmd_checks(a):
         checks.append(("semgrep (kit rules)", ["semgrep", "scan", "--metrics=off", "--error", "--quiet",
                                                "--config", rules, *live]))
     for name, command in cfg.get("tests", {}).items():
-        checks.append((f"tests: {name}", ["sh", "-c", command]))
+        # sh where there is one (Git for Windows provides it); otherwise the platform's own shell
+        checks.append((f"tests: {name}", ["sh", "-c", command] if shutil.which("sh") else command))
     results = []
     for name, command in checks:
         try:
-            p = subprocess.run(command, capture_output=True, text=True)
+            if isinstance(command, list):
+                command = [shutil.which(command[0]) or command[0], *command[1:]]  # finds .cmd shims on Windows
+            p = subprocess.run(command, capture_output=True, text=True, shell=isinstance(command, str))  # noqa: S602 nosemgrep
             result = "pass" if p.returncode == 0 else "fail"
             tail = (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
             results.append({"name": name, "result": result, "detail": tail[0][:200].replace("|", "/")})
@@ -639,7 +655,7 @@ def cmd_trailers(a):
                and pairs & {(f["path"], f["blob"]) for f in r["files"]}]
     else:
         staged = set(git("diff", "--cached", "--name-only", "-z").split("\0"))
-        new = [r for r in records_at("") if os.path.join(RECORDS, f"{r['id']}.md") in staged]
+        new = [r for r in records_at("") if f"{RECORDS}/{r['id']}.md" in staged]
     lines = []
     for r in new:
         lines += [f"Review-Record: {r['id']}", f"Review-Tier: {r['tier']}", f"Written-By: {r['author']}",

@@ -42,7 +42,7 @@ running once a global hooks path is set), then the gate:
 | Repository | What runs | Where records live |
 |---|---|---|
 | Kit committed (`.review/bin/review.py`) | its own lefthook configuration | `.review/records/`, committed with the code |
-| Anything else | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/<path>/records/` |
+| Anything else | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/home/<path>/records/` (or `abs/<drive>/<path>` outside the home folder) |
 | Opted out (`git config review.ambient false`) | the repository's own hooks only | none |
 
 Ambient mode exists for forks of other people's projects, where a `.review/` directory would travel
@@ -107,15 +107,52 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (48
-tests; each was run against a deliberately broken version of the code it covers and failed there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (107
+tests; the tests for each behaviour were run against a deliberately broken version of it and failed
+there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.
 
 ## Requirements
 
-Python 3.11 or newer for the scripts, which use only the standard library. The tools themselves:
-`brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff`,
-and `uv tool install --python 3.12 codegraphcontext==0.6.13` for the code graph.
+Python 3.11 or newer for the scripts, which use only the standard library, and Git. `kit/py` finds
+the interpreter (`python3`, `python` or `py -3`), so the hooks work where Windows provides no
+`python3`. The tools, by system:
+
+| System | Install |
+|---|---|
+| macOS | `brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff` |
+| Linux | Homebrew from brew.sh, then the macOS line without `swiftlint swiftformat` |
+| Windows | Git for Windows (its `sh` runs the hooks), Python and Node.js; `py -m pip install ruff mypy semgrep`; `npm install -g @biomejs/biome lefthook`; TruffleHog, and for Kotlin ktlint and detekt-cli, from their release pages |
+
+`uv tool install --python 3.12 codegraphcontext==0.6.13` adds the code graph. `kit-tests.yml` runs
+the suite on all three systems with the real tools.
+
+## The assistant guard
+
+`global.py on --claude` adds `kit/guard.py` to Claude Code as a PreToolUse hook. It refuses a Bash
+command that would skip or switch off the gate (`--no-verify` in any abbreviation, `git commit -n`,
+`core.hooksPath`, `LEFTHOOK=0`, the opt-out and upstream settings, `global.py off`, environment
+overrides), a `review.py signoff`, which only the person who read the code may enter, and an edit
+made by hand to a record or the ledger. It also refuses shell writes to those files, to `.git/config`,
+`~/.gitconfig`, `lefthook-local.yml` and Claude Code's settings, and variables such as `HOME=` and
+`LEFTHOOK=false` that run git without the gate. Reading settings and hooks is allowed, and commit
+messages and heredoc bodies are not inspected, so text about the gate does not trip it. Every
+failure inside the guard exits 2, the only status Claude Code treats as a refusal. The matching is
+best-effort. A script written to disk and then run is not inspected, and nor are a few deliberate
+evasions found in review: `bash -lc`, `env bash -c`, `sudo sh -c`, a command piped or fed by heredoc
+into a shell, `pwsh -c`, `env -u HOME` and PowerShell's `Remove-Item Env:`. Git has no way to refuse
+`--no-verify` itself, so a person can still skip the hooks; the guard binds the assistant, which
+writes most of the code.
+
+## Size and complexity
+
+Model-written code tends to run long. detekt and SwiftLint check method length and complexity from
+their templates, and the Ruff template adds C90 (complexity above 10) and PLR0915 (too many
+statements). In ambient mode a Python repository with no Ruff configuration of its own is linted with
+`templates/ruff-ambient.toml`, Ruff's defaults plus those two rules. Linters measure size, not need,
+so the review instructions in the AGENTS block and the default REVIEW.md make an oversized change an
+important finding: an unrequested abstraction, a reimplemented helper, dead or speculative code, or
+handling for cases that cannot occur.
 
 ## Limits
 

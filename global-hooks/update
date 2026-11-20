@@ -1,1 +1,3 @@
-dispatch
+#!/bin/sh
+# os-aid-review-kit: each hook name is this stub rather than a symlink, which Windows checkouts lose
+. "$(dirname "$0")/dispatch"

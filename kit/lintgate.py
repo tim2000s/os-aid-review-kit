@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from urllib.parse import unquote
 
 CONFIG_FILES = ["pyproject.toml", "ruff.toml", ".ruff.toml", "biome.json", "biome.jsonc",
                 "detekt.yml", "config/detekt/detekt.yml", ".editorconfig", ".swiftlint.yml", ".gitignore"]
@@ -59,7 +60,7 @@ def detekt(files, root):
     cmd = ["detekt", "--input", ",".join(files), "--report", f"sarif:{out}"]
     if cfg:
         cmd += ["--config", cfg, "--build-upon-default-config"]
-    need(cmd[0])
+    cmd[0] = need(cmd[0])
     p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
     if p.returncode not in (0, 2) or not os.path.exists(out):  # detekt exits 2 when it found issues
         raise LinterFailed(f"detekt failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:400]}")
@@ -89,15 +90,23 @@ def language_of(path):
     return next((lang for lang, (exts, _, _) in LANGUAGES.items() if ext in exts), None)
 
 
+ALTERNATIVE_NAMES = {"detekt": ("detekt-cli",)}  # the release zip installs detekt as detekt-cli
+
+
 def need(tool):
-    if shutil.which(tool) is None:
-        raise LinterFailed(f"{tool} is not installed; see the kit README for the install line")
+    """The tool's full path. Resolving it here, rather than leaving it to subprocess, is what finds a
+    Windows .cmd or .bat shim (npm's biome, ktlint.bat), which CreateProcess does not search for."""
+    for name in (tool, *ALTERNATIVE_NAMES.get(tool, ())):
+        path = shutil.which(name)
+        if path:
+            return path
+    raise LinterFailed(f"{tool} is not installed; see the kit README for the install line")
 
 
 def run_sarif(cmd, root, findings_rc=()):
     """Run a linter that prints SARIF. Exit 0, or a code the tool uses for 'found issues', with
     parseable output counts; anything else (including silence with a failing code) is a failure."""
-    need(cmd[0])
+    cmd = [need(cmd[0]), *cmd[1:]]
     p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
     if p.returncode not in (0, *findings_rc) or (p.returncode != 0 and not p.stdout.strip()):
         raise LinterFailed(f"{cmd[0]} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:400]}")
@@ -119,12 +128,16 @@ def parse_sarif(text, root):
     for run in doc["runs"]:
         for r in run.get("results", []):
             loc = (r.get("locations") or [{}])[0].get("physicalLocation", {})
-            path = loc.get("artifactLocation", {}).get("uri", "").removeprefix("file://")
+            path = unquote(loc.get("artifactLocation", {}).get("uri", "")).removeprefix("file://").replace("\\", "/")
             # tools disagree on the form (absolute, file://, or relative to some other base such as
-            # ktlint's), so cut at the temporary root wherever it appears
-            for prefix in (real_root.lstrip("/") + "/", root.lstrip("/") + "/"):
-                if prefix in path:
-                    path = path.split(prefix, 1)[1]
+            # ktlint's), so cut at the temporary root wherever it appears; Windows paths differ in
+            # separators and the case of the drive letter
+            fold = str.lower if os.name == "nt" else str
+            for base in (real_root, root):
+                prefix = base.replace("\\", "/").lstrip("/") + "/"
+                at = fold(path).find(fold(prefix))
+                if at >= 0:
+                    path = path[at + len(prefix):]
                     break
             found.append({"rule": r.get("ruleId", "?"), "message": r.get("message", {}).get("text", ""),
                           "path": path, "line": loc.get("region", {}).get("startLine", 0)})
@@ -175,6 +188,25 @@ def materialise(root, spec, paths, fallback=None):
             f.write(content)
 
 
+def ruff_fallback(*roots):
+    """Ambient mode only: give Ruff the kit's complexity and length rules where the repository has no
+    Ruff configuration on either side of the change. Never where it has one, since a ruff.toml would
+    take precedence over the repository's own [tool.ruff] table, and on both sides or neither, so that
+    removing a configuration does not turn every inherited complex function into a new finding."""
+    src = os.environ.get("REVIEW_CONFIG_FALLBACK")
+
+    def has_config(root):
+        if any(os.path.exists(os.path.join(root, n)) for n in ("ruff.toml", ".ruff.toml")):
+            return True
+        pyproject = os.path.join(root, "pyproject.toml")
+        return os.path.exists(pyproject) and "[tool.ruff" in open(pyproject, encoding="utf-8", errors="replace").read()
+
+    if not src or any(has_config(r) for r in roots):
+        return
+    for r in roots:
+        shutil.copy(os.path.join(src, "ruff-ambient.toml"), os.path.join(r, "ruff.toml"))
+
+
 def lint_tree(root, paths):
     by_linter = collections.defaultdict(list)
     for p in paths:
@@ -211,7 +243,7 @@ def fix_added(files):
             continue
         fmt = LANGUAGES[language_of(path)][2]
         if shutil.which(fmt[0]):
-            subprocess.run([*fmt, path], capture_output=True)
+            subprocess.run([shutil.which(fmt[0]), *fmt[1:], path], capture_output=True)
             subprocess.run(["git", "add", "--", path], check=True)
 
 
@@ -262,8 +294,9 @@ def main(argv=None):
     try:
         with tempfile.TemporaryDirectory() as after_root, tempfile.TemporaryDirectory() as before_root:
             materialise(after_root, new_spec, paths, fallback=old_spec)
-            after = lint_tree(after_root, paths)
             materialise(before_root, old_spec, olds, fallback=new_spec)
+            ruff_fallback(after_root, before_root)
+            after = lint_tree(after_root, paths)
             before = lint_tree(before_root, olds)
     except LinterFailed as e:
         print(f"lintgate: {e}", file=sys.stderr)

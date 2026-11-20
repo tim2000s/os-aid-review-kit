@@ -5,7 +5,7 @@ Every change to a file outside `.review/tiers.toml`'s exempt list is reviewed an
 is committed. The record names each file with the hash of the exact content reviewed, which is what
 lets a human reviewer later see what was checked and whether it has changed since.
 
-1. Make the change, then run the formatter and linter for each language touched. `lefthook` runs
+1. Make the smallest change that does the job, then run the formatter and linter for each language touched. `lefthook` runs
    them on commit; running them first saves a failed commit.
 2. Stage the change and run `python3 .review/bin/review.py checks`. It runs the lint gate (new
    findings only), the secret scan, the kit's Semgrep rules and the tests named in
@@ -13,7 +13,10 @@ lets a human reviewer later see what was checked and whether it has changed sinc
 3. Get a fresh-context review of the staged diff: a reviewer that did not write the change, given the
    diff and this repository's `REVIEW.md`, not the reasoning that produced the change. Label each
    finding important (fix before commit), nit or pre-existing. Fix every important finding, re-stage,
-   and run step 2 again.
+   and run step 2 again. The reviewer always checks that the change is no larger than the task needs:
+   an abstraction, option or wrapper nothing asked for, a reimplementation of a helper the codebase
+   already has, dead or speculative code, and defensive handling of cases that cannot occur are each
+   an important finding.
 4. Write, in plain words, what the change does, why, and what could go wrong, then record it:
    `python3 .review/bin/review.py record --author <who or what wrote it> --reviewer "<reviewer>, fresh
    context" --explanation <file> --findings <json file> [--way-back "<how to undo>"]`. A high-tier
@@ -21,6 +24,7 @@ lets a human reviewer later see what was checked and whether it has changed sinc
 5. Commit. The record file is staged with the code, and the commit message gets `Review-Record`,
    `Review-Tier`, `Written-By`, `Reviewed-By` and `Human-Review: pending` trailers.
 
+On Windows, where `python3` is often missing, run the scripts as `sh .review/bin/py .review/bin/review.py ...`.
 `python3 .review/bin/review.py status` lists what awaits a human, highest tier first. A human
 reviewer signs off with `review.py signoff <id> --by <name>`.
 

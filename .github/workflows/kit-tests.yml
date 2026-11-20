@@ -1,0 +1,54 @@
+# The kit's own test suite on Linux, macOS and Windows, with the real tools installed.
+name: kit-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Python and Node tools
+        run: |
+          python -m pip install pytest ruff==0.17.3 mypy==2.4.1
+          npm install -g @biomejs/biome@2.6.8 lefthook@2.2.2
+      - name: Semgrep
+        # Semgrep's Windows support is newer than its Linux and macOS support; a failure here is reported, not hidden
+        run: python -m pip install semgrep==1.186.0 && semgrep --version
+      - name: TruffleHog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RUNNER_OS" in Linux) p=linux_amd64 ;; macOS) p=darwin_arm64 ;; Windows) p=windows_amd64 ;; esac
+          bin="$RUNNER_TEMP/bin"
+          [ "$RUNNER_OS" = Windows ] && bin=$(cygpath -u "$bin")
+          mkdir -p "$bin"
+          gh release download v3.100.0 -R trufflesecurity/trufflehog -p "*_${p}.tar.gz" -O "$bin/th.tar.gz"
+          tar -xzf "$bin/th.tar.gz" -C "$bin"
+          [ "$RUNNER_OS" = Windows ] && cygpath -w "$bin" >> "$GITHUB_PATH" || echo "$bin" >> "$GITHUB_PATH"
+      - name: Tool versions
+        run: ruff --version && biome --version && lefthook version && trufflehog --version && git --version
+      - name: Tests
+        env:
+          KIT_REQUIRE_TOOLS: "1"  # a test skipped because a tool is missing fails the job
+        run: python -m pytest -q -rs tests/

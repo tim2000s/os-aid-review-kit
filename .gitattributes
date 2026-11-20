@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings on a Windows checkout with core.autocrlf, or sh cannot run them
+global-hooks/* text eol=lf
+kit/py text eol=lf
+.review/bin/py text eol=lf
+*.sh text eol=lf
+.lefthook/** text eol=lf

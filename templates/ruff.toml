@@ -2,7 +2,11 @@ line-length = 120
 target-version = "py310"
 
 [lint]
-select = ["E", "F", "I", "B", "S", "UP"]
+# C90 and PLR0915 catch functions grown too complex or too long, the usual shape of model-written bloat
+select = ["E", "F", "I", "B", "S", "UP", "C90", "PLR0915"]
+
+[lint.mccabe]
+max-complexity = 10
 
 [lint.per-file-ignores]
 "**/test*/**" = ["S101"]

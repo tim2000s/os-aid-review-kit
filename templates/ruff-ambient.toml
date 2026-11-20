@@ -1,0 +1,9 @@
+# Used by ambient mode where a repository has no Ruff configuration of its own: Ruff's defaults plus
+# the complexity and function-length rules, without the style and security sets the full template adds.
+line-length = 120
+
+[lint]
+select = ["E4", "E7", "E9", "F", "C90", "PLR0915"]
+
+[lint.mccabe]
+max-complexity = 10

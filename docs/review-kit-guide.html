@@ -81,7 +81,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule);
 <p>The kit moves the checking to the person writing the code, before anything is pushed, and writes down what was checked. Every reviewed file is recorded with the git hash of the exact content that was reviewed, so a maintainer can tell in seconds whether the code in front of them is the code that was reviewed.</p>
 
 <h2>What it does</h2>
-<p>Take a change your assistant has made to the SMB limit logic in an AndroidAPS fork. That file can change a dose, so the kit treats it as high tier. The tier depends on what a file can affect, never on who or what wrote it. Before the change can be committed:</p>
+<p>Take a change your assistant has made to the SMB limit logic in an AndroidAPS fork. That file can change a dose, so the kit treats it as high tier. A file's tier depends on what it can affect; who or what wrote it plays no part. Before the change can be committed:</p>
 <ol class="steps">
   <li><h3>The checks run on what is staged</h3>
     <p>Linters, a secret scan, static-analysis rules and the project's tests. The linters fail only on problems the change adds, so you are never asked to fix the years of old findings an established project carries.</p></li>
@@ -100,32 +100,55 @@ Reviewed-By: claude-opus-5-5, fresh context
 Human-Review: <span class="wait">pending</span></div></li>
 </ol>
 <p>Pushes are checked the same way, branch by branch. A person reviewing later runs <code>review.py status</code> to see what is waiting and whether anything has changed since its review, and <code>review.py signoff</code> to record their verdict. Sign-off is refused if the file differs from the one that was reviewed.</p>
-<p>In practice you do not run these steps by hand. The kit gives your assistant instructions that Claude Code and Codex read at the start of each session, so you ask for the change and the assistant runs the checks, gets the review and writes the record. If it skips a step, the commit is refused with a message saying what is missing.</p>
+<p>You do not run these steps by hand. Your assistant is given instructions it reads at the start of each session, so you ask for the change and the assistant runs the checks, gets the review and writes the record. If it skips a step, the commit is refused with a message saying what is missing.</p>
+
+<h2>Code quality and over-long code</h2>
+<p>Model-written code tends to be longer than it needs to be. The kit looks for this in two ways.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Language</th><th>Automatic checks on size and complexity</th></tr></thead>
+  <tbody>
+    <tr><td>Kotlin</td><td>detekt: methods too long or too complex, too many parameters, classes with too many functions</td></tr>
+    <tr><td>Swift</td><td>SwiftLint: function length, complexity, line length</td></tr>
+    <tr><td>Python</td><td>Ruff: function complexity (more than 10 branches) and too many statements in one function</td></tr>
+    <tr><td>JavaScript</td><td>Biome's complexity rules, except where the project already uses ESLint, whose house style it defers to</td></tr>
+  </tbody>
+</table></div>
+<p>Linters measure size, not need. The second-model review is told to treat an oversized change as an important finding, which must be fixed before commit. That covers an abstraction or option nobody asked for, a rewrite of a helper the project already has, dead or speculative code, and handling for cases that cannot happen.</p>
+
+<h2>The assistant cannot skip the checks</h2>
+<p>Git itself lets anyone skip the hooks. The kit therefore adds a guard to Claude Code that refuses, before it runs, any command that would skip or switch off the checks: <code>--no-verify</code> in any spelling, <code>git commit -n</code>, changing where git looks for hooks, switching off the hook runner, or opting a project out. The guard also stops the assistant editing a review record by hand or entering a human sign-off, which only the person who read the code may do. The refusal tells the assistant to run the review steps instead.</p>
+<p>The guard covers Claude Code. Other assistants have no equivalent hook, and are bound only by their instructions and by the checks on the shared repository.</p>
 
 <h2>Setting it up on your machine</h2>
+<p>Four steps, the same on every system: install the tools, put the kit in your home folder, switch it on, and tell your assistant. You need Python 3.11 or newer, Git, and only the tools for the languages you work in (Kotlin for AndroidAPS, Swift for Trio, JavaScript for Nightscout).</p>
+
 <h3>1. Install the tools</h3>
-<p>On a Mac with Homebrew:</p>
-<div class="term"><span class="dim">$</span> brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff</div>
-<p>You need Python 3.11 or newer, and only the tools for the languages you work in: ktlint and detekt for AndroidAPS, SwiftLint and SwiftFormat for Trio, Biome for Nightscout.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>System</th><th>Command</th></tr></thead>
+  <tbody>
+    <tr><td>macOS</td><td><code>brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff</code></td></tr>
+    <tr><td>Linux</td><td>Install Homebrew from brew.sh, then the macOS line without <code>swiftlint swiftformat</code></td></tr>
+    <tr><td>Windows</td><td>Install Git for Windows, Python and Node.js, then in Git Bash: <code>py -m pip install ruff mypy semgrep</code> and <code>npm install -g @biomejs/biome lefthook</code>. Download <code>trufflehog</code> from its GitHub releases page and put it on your PATH. For Kotlin, also download <code>ktlint</code> and <code>detekt-cli</code> from their releases pages; both need Java 17 or newer.</td></tr>
+  </tbody>
+</table></div>
 
 <h3>2. Put the kit in your home folder</h3>
-<p>Save the kit folder you were sent as <code>~/os-aid-review-kit</code>.</p>
+<p>Save the kit folder you were sent as <code>os-aid-review-kit</code> in your home folder (<code>~/os-aid-review-kit</code>, or <code>C:\Users\you\os-aid-review-kit</code> on Windows).</p>
 
-<h3>3. Switch it on for every repository</h3>
-<div class="term"><span class="dim">$</span> python3 ~/os-aid-review-kit/kit/global.py on</div>
-<p>From then on every commit and push on the machine goes through the gate. Nothing is added to your projects: the records are kept in <code>~/.review-ledger</code>. Any hooks your projects already use keep running. Merging from upstream needs no record for files your fork never changed. <code>global.py off</code> switches it all off again.</p>
+<h3>3. Switch it on</h3>
+<p>In a terminal (Git Bash on Windows):</p>
+<div class="term"><span class="dim">$</span> python3 ~/os-aid-review-kit/kit/global.py on --claude</div>
+<p>On Windows, use <code>py</code> in place of <code>python3</code>. From then on every commit and push on the machine goes through the gate, and <code>--claude</code> adds the guard to Claude Code. Nothing is added to your projects: the records are kept in <code>~/.review-ledger</code>. Any hooks your projects already use keep running. Merging from upstream needs no record for files your fork never changed. <code>global.py off</code> switches both off again.</p>
 
 <h3>4. Tell your assistant</h3>
 <p>Add this line to the <code>CLAUDE.md</code> or <code>AGENTS.md</code> your assistant reads:</p>
-<div class="term">Before every commit, follow the review steps in ~/os-aid-review-kit/templates/AGENTS-block.md, using python3 ~/os-aid-review-kit/kit/review.py.</div>
+<div class="term">Before every commit, follow the review steps in ~/os-aid-review-kit/templates/AGENTS-block.md, using ~/os-aid-review-kit/kit/review.py in place of .review/bin/review.py.</div>
 <p>To keep the records inside one particular project instead, so they travel with its pull requests, run <code>python3 ~/os-aid-review-kit/kit/install.py &lt;project folder&gt; --hooks</code> and commit what it adds.</p>
+<div class="note">Check once that it is working: make a small change and try to commit it without a review. The commit should be refused. Try the same from any graphical Git program you use, since some bundle a Git of their own that may not run the hooks. On Windows, Git inside WSL is a separate installation and needs the kit switched on there as well.</div>
 
 <h2>What it does not prove</h2>
-<ul>
-  <li>A record is an attestation, not a proof: a review is only as good as the reviewer. The kit makes the review visible and checkable; it does not replace a person reading safety-critical code, but it tells that person which files to read and what has already been checked.</li>
-  <li><code>git commit --no-verify</code> skips the hooks. Do not use it. The shared repository's CI and branch protection are what hold in the end.</li>
-</ul>
-<p>The kit has 48 automated tests, has been through six rounds of independent review, and has gated AndroidAPS, Trio and Nightscout work on one developer's machine since 20 November 2026. Its GitHub CI workflow has not yet run on GitHub.</p>
+<p>A record is an attestation, not a proof: a review is only as good as the reviewer. The kit makes the review visible and checkable. It does not replace a person reading safety-critical code, but it tells that person which files to read and what has already been checked.</p>
+<p>__TESTED__</p>
 
 <footer>Questions and problems to Tim Street. 20 November 2026.</footer>
 </div>

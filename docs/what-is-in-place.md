@@ -44,7 +44,7 @@ hook the repository had of its own, and then one of the following.
 | Repository | What runs | Where the records are |
 |---|---|---|
 | Kit committed (os-aid-review-kit; cgm-remote-monitor branch `review-kit`) | the repository's own lefthook configuration | `.review/records/`, committed with the code |
-| Any other repository | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/<path>/records/` |
+| Any other repository | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/home/<path>/records/` |
 | Opted out: timsim-claude-memory, trio-claude-memory, boost-aaps-memory | the repository's own hooks only | none |
 
 Ambient mode exists because most repositories here are forks of other people's projects
