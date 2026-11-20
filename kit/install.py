@@ -103,6 +103,10 @@ pre-commit:
       glob: "*.{{{globs}}}"
       run: python3 .review/bin/lintgate.py --staged --mode {mode}
     3_secret-scan:
+      # TruffleHog applies --exclude-paths only while walking directories, not to files named on its
+      # command line, so the hook filters the records out itself; CI's history scan uses the file
+      exclude:
+        - ".review/records/*.md"
       run: >-
         trufflehog filesystem --no-update --no-verification --fail --config trufflehog.yml
         --exclude-paths .review/trufflehog-exclude.txt {{staged_files}}
