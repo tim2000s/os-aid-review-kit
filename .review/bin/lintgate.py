@@ -20,12 +20,14 @@ A linter that is missing, crashes or prints nothing parseable fails the gate rat
 """
 import argparse
 import collections
+import fnmatch
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 CONFIG_FILES = ["pyproject.toml", "ruff.toml", ".ruff.toml", "biome.json", "biome.jsonc",
                 "detekt.yml", "config/detekt/detekt.yml", ".editorconfig", ".swiftlint.yml", ".gitignore"]
@@ -227,10 +229,14 @@ def main(argv=None):
         old_spec = (git("hash-object", "-t", "tree", "/dev/null").strip() if a.base == ":root"
                     else git("merge-base", a.base, "HEAD").strip())
     wanted = set(a.languages.split(",")) if a.languages else set(LANGUAGES)
+    exempt = []
+    if os.path.exists(".review/tiers.toml"):
+        with open(".review/tiers.toml", "rb") as fh:
+            exempt = tomllib.load(fh).get("exempt", {}).get("paths", [])
     files, skipped = [], []
     for status, path in changed(a.staged, old_spec, new_spec):
-        if path.startswith(".review/"):
-            continue  # the kit's own scripts, linted in the kit's repository under its own rules
+        if path.startswith(".review/") or any(fnmatch.fnmatch(path, p) for p in exempt):
+            continue  # the kit's own scripts (linted in the kit's repository) and files the tiers exempt
         lang = language_of(path)
         if lang in wanted:
             files.append((status, path))
