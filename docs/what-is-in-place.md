@@ -129,8 +129,8 @@ an advisory PR-Agent review and an optional SonarQube scan.
 ## How it was verified
 
 The kit's test suite builds throwaway repositories and runs the real tools against them. It holds
-108 tests, run on Linux, macOS and Windows by `kit-tests.yml`; all passed on all three on 20
-November 2026, apart from three that do not apply on Windows. The tests written for each defect
+123 tests, run on Linux, macOS and Windows by `kit-tests.yml`; all passed on all three on 20
+November 2026, apart from four that do not apply on Windows. The tests written for each defect
 and each new behaviour were run against a version with the defect put back and failed there,
 because a test that cannot fail checks nothing.
 
