@@ -1,0 +1,37 @@
+# Applied on top of detekt's defaults (--build-upon-default-config). The thresholds are tighter than
+# the defaults where generated code tends to sprawl: long functions that do several things, and
+# deep branching that hides which path doses.
+complexity:
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 12
+  LongMethod:
+    active: true
+    threshold: 50
+  LongParameterList:
+    active: true
+    functionThreshold: 7
+  NestedBlockDepth:
+    active: true
+    threshold: 4
+  TooManyFunctions:
+    active: false
+empty-blocks:
+  EmptyCatchBlock:
+    active: true
+    allowedExceptionNameRegex: '^(_|ignored|expected)$'
+exceptions:
+  SwallowedException:
+    active: true
+  TooGenericExceptionCaught:
+    active: true
+potential-bugs:
+  UnsafeCallOnNullableType:
+    active: true
+style:
+  MagicNumber:
+    active: false # dosing code is full of documented constants; the semgrep mmol rule covers the one that matters
+  MaxLineLength:
+    active: false # ktlint owns line length
+  WildcardImport:
+    active: false # ktlint owns imports

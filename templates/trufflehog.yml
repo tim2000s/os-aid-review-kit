@@ -1,0 +1,15 @@
+# Nightscout credentials have no public verification endpoint, so TruffleHog's built-in detectors
+# never report them. These two are the ones an AID repository is most likely to leak.
+detectors:
+  - name: NightscoutAccessToken
+    keywords: [token]
+    regex:
+      token: '\b[a-z0-9]{3,}-[0-9a-f]{16}\b'
+  - name: NightscoutApiSecretQuoted
+    keywords: [api_secret, API_SECRET, apiSecret]
+    regex:
+      secret: '(?i)api_?secret\s*[=:]\s*["'']([^"''\s]{12,})["'']'
+  - name: NightscoutApiSecretEnvLine
+    keywords: [API_SECRET]
+    regex:
+      secret: '(?m)^\s*(?:export\s+)?API_SECRET=([^\s"'']{12,})\s*$'

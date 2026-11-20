@@ -1,0 +1,8 @@
+extend-exclude = ["tests/semgrep_targets"]
+line-length = 120
+[lint]
+select = ["E", "F", "I", "B", "S", "UP"]
+# subprocess and assert are how these scripts and their tests work; the inputs are git's own output.
+ignore = ["S603", "S607", "S404", "E702"]
+[lint.per-file-ignores]
+"tests/*" = ["S101", "S108"]

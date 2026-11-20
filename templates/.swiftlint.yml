@@ -1,0 +1,26 @@
+# Strict on the patterns that crash at run time: a force unwrap or force cast in a loop app stops
+# the loop rather than failing one calculation.
+opt_in_rules:
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - empty_count
+  - fatal_error_message
+  - discouraged_optional_boolean
+force_cast: error
+force_try: error
+force_unwrapping: error
+implicitly_unwrapped_optional: error
+cyclomatic_complexity:
+  warning: 12
+  error: 20
+function_body_length:
+  warning: 60
+  error: 100
+line_length:
+  warning: 140
+  error: 200
+excluded:
+  - Pods
+  - Carthage
+  - .build
+  - DerivedData

@@ -1,0 +1,25 @@
+# Trio and forks of it. High: anything that can change a dose, a limit, whether the loop runs, or
+# what glucose or treatment data the algorithm sees.
+mode = "adopt"
+default_tier = "medium"
+
+[high]
+paths = [
+  "Trio/Sources/APS/*", "Trio/Sources/Services/BolusCalculator/*", "Trio/Sources/Services/BolusSafety/*",
+  "Trio/Sources/Services/IOB/*", "Trio/Sources/Services/Adjustments/*", "Trio/Sources/Services/RemoteControl/*",
+  "Trio/Sources/Models/*", "trio-oref/*", "AlgorithmPackage/*", "LoopAlgorithm/*", "BoostPort/*",
+  "GlucoseSmoothing/*", "*Kit/*", "LibreTransmitter/*", "LibreLoop/*", "dexcom-share-client-swift/*",
+  "TidepoolService/*", "Trio/Resources/json/defaults/*", "Config.xcconfig",
+]
+
+[medium]
+paths = ["Trio/Sources/Modules/*", "Trio/Sources/Views/*", "Trio Watch App*/*", "LiveActivity/*", "*.swift"]
+
+[low]
+paths = ["*.md", "DeveloperDocs/*", "Trio/Sources/Localizations/*"]
+
+[exempt]
+paths = ["*.png", "*.jpg", "*.svg", "*.pdf", "LICENSE*", "crowdin.yml", "Gemfile.lock"]
+
+[tests]
+# unit = "xcodebuild test -workspace Trio.xcworkspace -scheme 'Trio Tests' -destination 'platform=iOS Simulator,name=iPhone 16'"

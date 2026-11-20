@@ -1,0 +1,27 @@
+# AndroidAPS and forks of it (Boost). High: anything that can change a dose, a limit, whether the
+# loop runs, or what glucose or treatment data the loop sees.
+mode = "adopt"
+default_tier = "medium"
+
+[high]
+paths = [
+  "plugins/aps/*", "plugins/constraints/*", "plugins/insulin/*", "plugins/sensitivity/*",
+  "plugins/smoothing/*", "plugins/source/*", "plugins/automation/*", "plugins/sync/*",
+  "plugins/main/*/smsCommunicator/*", "pump/*",
+  "implementation/*/queue/*", "implementation/*/iob/*", "implementation/*/profile/*",
+  "implementation/*/pump/*", "implementation/*/aps/*",
+  "core/data/*", "core/keys/*", "core/interfaces/*", "core/objects/*",
+  "database/*", "app/src/main/AndroidManifest.xml", "*/di/*", "*.gradle.kts", "gradle/libs.versions.toml",
+]
+
+[medium]
+paths = ["ui/*", "core/ui/*", "core/graph/*", "plugins/configuration/*", "wear/*", "*.kt", "*.java"]
+
+[low]
+paths = ["*.md", "docs/*", "backtesting/*", "*/src/main/res/values-*/strings.xml"]
+
+[exempt]
+paths = ["*.png", "*.jpg", "*.webp", "*.svg", "*.pdf", "LICENSE*", "crowdin.yml"]
+
+[tests]
+# unit = "./gradlew testFullDebugUnitTest"

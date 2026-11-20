@@ -1,0 +1,24 @@
+# Read by the pr-agent job in quality-gate.yml. The reviewer is told what this repository is so it
+# weighs dosing-path changes accordingly; its output is advisory and never replaces a review record.
+[config]
+model = "anthropic/claude-sonnet-5-5"
+fallback_models = []
+custom_model_max_tokens = 200000
+
+[pr_reviewer]
+require_tests_review = true
+require_security_review = true
+num_max_findings = 8
+extra_instructions = """
+This repository is part of an open-source automated insulin delivery system. Treat any change that
+can alter a dose, a safety limit, whether the loop runs, or the glucose and treatment data the loop
+reads as high risk, and say so explicitly. Check the PR's review records under .review/records for
+the tier the author assigned, and flag it if the diff touches more than the record describes.
+"""
+
+[pr_description]
+publish_labels = false
+add_original_user_description = true
+
+[pr_code_suggestions]
+num_code_suggestions = 4

@@ -1,0 +1,24 @@
+# cgm-remote-monitor. Nightscout doses nothing, but loops read glucose and treatments from it and
+# some upload through it, so whatever decides what is stored or served through the APIs is high.
+mode = "adopt"
+default_tier = "medium"
+
+[high]
+paths = [
+  "lib/server/entries.js", "lib/server/treatments.js", "lib/server/profile.js", "lib/server/devicestatus.js",
+  "lib/api/*", "lib/api3/*", "lib/authorization/*", "lib/data/*", "lib/server/websocket.js",
+  "lib/plugins/bwp.js", "lib/plugins/iob.js", "lib/plugins/cob.js", "lib/plugins/ar2.js", "lib/server/bootevent.js",
+  "lib/settings.js", "package.json",
+]
+
+[medium]
+paths = ["lib/*", "views/*", "static/*", "*.js"]
+
+[low]
+paths = ["*.md", "docs/*", "testing/*"]
+
+[exempt]
+paths = ["*.png", "*.jpg", "*.svg", "*.ico", "*.pdf", "LICENSE*", "package-lock.json", "translations/*"]
+
+[tests]
+unit = "env $(cat tests/ci.test.env | xargs) npx mocha --timeout 10000 --exit tests/*.test.js > .review/.test-output.txt 2>&1; s=$?; tail -3 .review/.test-output.txt; exit $s"
