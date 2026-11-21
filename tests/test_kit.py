@@ -534,6 +534,18 @@ def test_content_already_upstream_needs_no_record(plain, tmp_path):
     assert p.returncode == 1 and "unreviewed: mine.py" in p.stdout and "app.py" not in p.stdout
 
 
+@pytest.mark.skipif(shutil.which("trufflehog") is None, reason="trufflehog not installed")
+def test_ambient_checks_scan_secrets_with_the_kits_config(plain):
+    # the scan runs as a child of `checks`; it once looked for the repo's trufflehog.yml, which an ambient repo lacks
+    stage_change(plain)
+    p = ambient(plain, "checks")
+    assert "pass     secrets (trufflehog)" in p.stdout, p.stdout
+    (plain / "conf.txt").write_text("token=demo1234-" + "0123456789abcdef\n")  # split so this file holds no token
+    sh(plain, "git", "add", "conf.txt")
+    p = ambient(plain, "checks")
+    assert "fail     secrets (trufflehog)" in p.stdout and "trufflehog.yml" not in p.stdout, p.stdout
+
+
 @pytest.mark.skipif(shutil.which("biome") is None, reason="biome not installed")
 def test_ambient_lints_with_the_kits_config_where_the_repo_has_none(plain):
     (plain / "new.js").write_text("const unused = 1;\ndebugger;\n")

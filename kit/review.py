@@ -401,7 +401,10 @@ def cmd_secrets(a):
     hog = shutil.which("trufflehog")
     if hog is None:
         raise SystemExit("review: trufflehog is not installed, so the secret scan cannot run")
-    hog_cfg = os.path.join(KIT, "templates", "trufflehog.yml") if AMBIENT else "trufflehog.yml"
+    # `checks` runs this as a child that inherits REVIEW_TIERS and so skips enter_ambient; the repository
+    # itself says which mode applies, as it does for the gate in main (cwd is the toplevel here)
+    ambient = AMBIENT or not os.path.exists(DIR)
+    hog_cfg = os.path.join(KIT, "templates", "trufflehog.yml") if ambient else "trufflehog.yml"
     p = subprocess.run([hog, "filesystem", "--no-update", "--no-verification", "--json",
                         "--config", hog_cfg, *a.paths], capture_output=True, **UTF8)
     if p.returncode != 0:
