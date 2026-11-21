@@ -39,9 +39,7 @@ case "$hook" in
     sh "$py" "$review" check || exit 1
     git diff --cached --name-only -z --diff-filter=ACMRT > "${TMPDIR:-/tmp}/review-staged.$$"
     if [ -s "${TMPDIR:-/tmp}/review-staged.$$" ]; then
-      command -v trufflehog >/dev/null || { echo "review: trufflehog is not installed, so the secret scan cannot run" >&2; exit 1; }
-      xargs -0 trufflehog filesystem --no-update --no-verification --fail --config "$kit/templates/trufflehog.yml" \
-        < "${TMPDIR:-/tmp}/review-staged.$$"
+      xargs -0 sh "$py" "$review" secrets < "${TMPDIR:-/tmp}/review-staged.$$"
       rc=$?
     else
       rc=0

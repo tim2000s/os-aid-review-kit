@@ -474,6 +474,38 @@ def test_ambient_secret_scan_runs_at_commit(plain):
     assert p.returncode != 0 and "Nightscout" in p.stdout + p.stderr
 
 
+@pytest.mark.skipif(shutil.which("trufflehog") is None, reason="trufflehog not installed")
+def test_secret_already_on_a_remote_does_not_block(plain, tmp_path):
+    key = "AIza" + "SyB7qXk2Lm9Pw4Rt8Vn3Cz6Hj1Fd5Gs0Ue_k"  # split so this file holds no key
+    up = tmp_path / "up"
+    sh(tmp_path, "git", "clone", "-q", str(plain), str(up))
+    (up / "google-services.json").write_text(f'{{"current_key": "{key}"}}\n')
+    sh(up, "git", "add", "google-services.json")
+    sh(up, "git", "commit", "-qm", "firebase config", "--no-verify")
+    sh(plain, "git", "remote", "add", "upstream", str(up))
+    sh(plain, "git", "fetch", "-q", "upstream")
+    sh(plain, "git", "merge", "-q", "--no-verify", "upstream/main")
+    (plain / "google-services.json").write_text(f'{{"current_key": "{key}", "project": "aaps"}}\n')
+    p = ambient(plain, "secrets", "google-services.json")
+    assert p.returncode == 0 and "published" in p.stdout, p.stdout + p.stderr
+    (plain / "other.json").write_text(f'{{"current_key": "{key}"}}\n')  # the same key in a file not on the remote
+    p = ambient(plain, "secrets", "other.json")
+    assert p.returncode == 1 and "1 new finding" in p.stdout, p.stdout + p.stderr
+    (plain / "google-services.json").write_text(f'{{"current_key": "{key[:10]}Q{key[11:]}"}}\n')  # a new key
+    p = ambient(plain, "secrets", "google-services.json")
+    assert p.returncode == 1 and "SECRET" in p.stdout, p.stdout + p.stderr
+    # a key pair whose public half is on the remote: Raw holds only the ID, so it must still block
+    aws = "AKIA" + "QYLPMN5HHHFPZAM2"
+    (up / "aws.cfg").write_text(f"aws_access_key_id = {aws}\naws_secret_access_key = placeholder\n")
+    sh(up, "git", "add", "aws.cfg")
+    sh(up, "git", "commit", "-qm", "aws", "--no-verify")
+    sh(plain, "git", "fetch", "-q", "upstream")
+    pair = "1tUm636uS1yOEcfP5pvfqJ/ml36mF7AkyHsEU0IU"  # a made-up secret half
+    (plain / "aws.cfg").write_text(f"aws_access_key_id = {aws}\naws_secret_access_key = {pair}\n")
+    p = ambient(plain, "secrets", "aws.cfg")
+    assert p.returncode == 1 and "SECRET" in p.stdout, p.stdout + p.stderr
+
+
 def test_global_hooks_run_the_repositorys_own_hook_and_honour_opt_out(plain):
     own = plain / ".git" / "hooks" / "pre-commit"
     own.write_text("#!/bin/sh\necho own-hook-ran; exit 1\n", newline="\n")

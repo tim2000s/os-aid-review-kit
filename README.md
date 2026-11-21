@@ -22,7 +22,7 @@ for Kotlin, Swift, Python and JavaScript and adds configuration only for what it
 | Hooks | Lefthook | `lefthook.yml` |
 | Static analysis | Semgrep (registry rules plus the kit's own) | `.semgrep/custom-ai-guardrails.yml` |
 | Dependencies | Trivy, with a CycloneDX SBOM in CI | `trivy.yaml`, `.trivyignore` |
-| Secrets | TruffleHog, with detectors for Nightscout tokens and API secrets | `trufflehog.yml`, `.gitignore` lines |
+| Secrets | TruffleHog, with detectors for Nightscout tokens and API secrets; a value the file already holds on a remote-tracking branch, such as the Firebase keys AndroidAPS and Trio publish, is listed without failing | `trufflehog.yml`, `.gitignore` lines |
 | CI | GitHub Actions; PR-Agent advisory review; optional SonarQube | `.github/workflows/quality-gate.yml`, `.pr_agent.toml`, `sonar-project.properties` |
 | Code graph for agents | CodeGraphContext over MCP | `.mcp.json` |
 | Agent instructions | | a marked block in `AGENTS.md`, with `CLAUDE.md` importing it |

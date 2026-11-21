@@ -354,8 +354,7 @@ def cmd_checks(a):
     here = os.path.dirname(os.path.abspath(__file__))
     lint = [sys.executable, os.path.join(here, "lintgate.py"), "--mode", cfg.get("mode", "adopt")]
     tpl = os.path.join(KIT, "templates")
-    hog_cfg, rules = ((os.path.join(tpl, "trufflehog.yml"), os.path.join(tpl, ".semgrep")) if AMBIENT
-                      else ("trufflehog.yml", ".semgrep/"))
+    rules = os.path.join(tpl, ".semgrep") if AMBIENT else ".semgrep/"
     if cfg.get("tests"):
         dirty = tree_dirty("index" if a.base is None else "HEAD")
         if dirty:
@@ -371,8 +370,7 @@ def cmd_checks(a):
     live = [p for p, s in files.items() if s != "D" and not os.path.islink(p)]
     checks = [("lint (new findings)", [*lint, *(["--staged"] if a.base is None else ["--base", a.base])])]
     if live:
-        checks.append(("secrets (trufflehog)", ["trufflehog", "filesystem", "--no-update", "--no-verification",
-                                                "--fail", "--config", hog_cfg, *live]))
+        checks.append(("secrets (trufflehog)", [sys.executable, os.path.join(here, "review.py"), "secrets", *live]))
         checks.append(("semgrep (kit rules)", ["semgrep", "scan", "--metrics=off", "--error", "--quiet",
                                                "--config", rules, *live]))
     for name, command in cfg.get("tests", {}).items():
@@ -393,6 +391,37 @@ def cmd_checks(a):
     with open(LAST_CHECKS, "w", encoding="utf-8") as f:
         json.dump({"base": a.base, "blobs": blobs, "checks": results}, f, indent=1)
     return 1 if any(r["result"] != "pass" for r in results) else 0
+
+
+def cmd_secrets(a):
+    """TruffleHog on the named files. A value the same file already holds on a remote-tracking branch is
+    listed but does not fail, since it has left the machine already and this commit sends nothing new: the
+    Firebase keys in AndroidAPS's google-services.json and Trio's GoogleService-Info.plist are public
+    by design, and TruffleHog reads their AIza prefix as a Gemini key."""
+    hog = shutil.which("trufflehog")
+    if hog is None:
+        raise SystemExit("review: trufflehog is not installed, so the secret scan cannot run")
+    hog_cfg = os.path.join(KIT, "templates", "trufflehog.yml") if AMBIENT else "trufflehog.yml"
+    p = subprocess.run([hog, "filesystem", "--no-update", "--no-verification", "--json",
+                        "--config", hog_cfg, *a.paths], capture_output=True, **UTF8)
+    if p.returncode != 0:
+        raise SystemExit(f"review: trufflehog failed: {p.stderr.strip()[-300:]}")
+    remotes = git("for-each-ref", "--format=%(refname)", "refs/remotes", check=False).split()
+    new = 0
+    for line in p.stdout.splitlines():
+        r = json.loads(line)
+        fs = r["SourceMetadata"]["Data"]["Filesystem"]
+        # RawV2 is set where Raw is only the public half of a pair (an AWS key ID), and git grep reads a
+        # newline in -e as two patterns, so neither kind is ever counted as known
+        known = remotes and r["Raw"] and not r.get("RawV2") and "\n" not in r["Raw"] and subprocess.run(
+            ["git", "grep", "-q", "-F", "-e", r["Raw"], *remotes, "--", f":(literal){fs['file']}"],
+            capture_output=True).returncode == 0
+        new += not known
+        name = (r.get("ExtraData") or {}).get("name") or r["DetectorName"]  # custom detectors keep theirs here
+        print(f"{'published' if known else 'SECRET':9} {name} in {fs['file']}:{fs.get('line')}"
+              f"{'  (already on a remote-tracking branch, not blocking)' if known else ''}")
+    print(f"secret scan: {new} new finding(s)")
+    return 1 if new else 0
 
 
 def cmd_record(a):
@@ -694,6 +723,7 @@ def main(argv=None):
     s.add_argument("--way-back")
     s = sub.add_parser("check"); s.add_argument("--base")
     sub.add_parser("check-push")
+    s = sub.add_parser("secrets"); s.add_argument("paths", nargs="+")
     s = sub.add_parser("status"); s.add_argument("--all", action="store_true")
     s = sub.add_parser("signoff"); s.add_argument("id"); s.add_argument("--by", required=True)
     s.add_argument("--verdict", choices=["approved", "changes-requested"], default="approved")
@@ -709,7 +739,7 @@ def main(argv=None):
         enter_ambient(os.getcwd())
     return {"tier": cmd_tier, "checks": cmd_checks, "record": cmd_record, "check": cmd_check,
             "check-push": cmd_check_push, "status": cmd_status, "signoff": cmd_signoff,
-            "pr-body": cmd_pr_body, "trailers": cmd_trailers, "base": cmd_base}[a.cmd](a) or 0
+            "pr-body": cmd_pr_body, "trailers": cmd_trailers, "base": cmd_base, "secrets": cmd_secrets}[a.cmd](a) or 0
 
 
 if __name__ == "__main__":
