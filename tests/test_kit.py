@@ -376,6 +376,26 @@ def test_pre_push_hook_checks_a_branch_other_than_head(repo, tmp_path):
     assert "evil" not in sh(repo, "git", "ls-remote", "origin").stdout
 
 
+def test_rewritten_history_is_measured_from_nothing(repo):
+    # a rewrite shares no history with the remote tip, so merge-base has nothing to return
+    old = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    (repo / "app.py").write_text("def f():\n    return 1\n")
+    sh(repo, "git", "add", "-A")
+    tree = sh(repo, "git", "write-tree").stdout.strip()
+    new = sh(repo, "git", "commit-tree", tree, "-m", "rewritten").stdout.strip()
+    line = f"refs/heads/main {new} refs/heads/main {old}\n"
+    p = subprocess.run([PY, ".review/bin/review.py", "check-push"], cwd=repo, input=line,
+                       capture_output=True, **UTF8)
+    assert p.returncode == 1 and "unreviewed: app.py" in p.stdout, p.stdout + p.stderr
+    assert "unreviewed: .gitignore" in p.stdout  # unchanged by the rewrite, so only the empty tree lists it
+    assert "shares no history" in p.stderr
+
+
+def test_a_bad_base_still_stops_and_is_not_called_unrelated(repo):
+    p = review(repo, "check", "--base", "nosuchref")
+    assert p.returncode != 0 and "shares no history" not in p.stderr and "merge-base" in p.stderr
+
+
 def test_first_push_measures_from_nothing(repo):
     # from nothing every finding is new, so the fixture's deliberate unused import has to go first
     (repo / "app.py").write_text("def f():\n    return 1\n")

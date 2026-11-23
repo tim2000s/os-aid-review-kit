@@ -164,7 +164,12 @@ def span_of(base=None, tip=None):
     tip = tip or "HEAD"
     if base == ":root":  # everything the tip holds, as for a first push
         return git("hash-object", "-t", "tree", "/dev/null"), git("rev-parse", tip)
-    return git("merge-base", base, tip), git("rev-parse", tip)
+    p = subprocess.run(["git", "merge-base", base, tip], capture_output=True, **UTF8)
+    if p.returncode == 1 and not p.stdout.strip():
+        # unrelated histories, as after a rewrite: nothing is shared, so everything the tip holds is new
+        print(f"review: {tip} shares no history with {base}, so it is measured from the empty tree", file=sys.stderr)
+        return span_of(":root", tip)
+    return git("merge-base", base, tip), git("rev-parse", tip)  # any other failure (a bad ref) still stops here
 
 
 def changed(span):
