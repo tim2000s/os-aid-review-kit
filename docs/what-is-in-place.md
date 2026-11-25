@@ -22,8 +22,9 @@ A change is staged, and then:
    Each finding is labelled important, nit or pre-existing; every important one is fixed and the
    checks are run again.
 3. `review.py record` writes the review record. It refuses when the files changed after the checks
-   ran, when an important finding was not fixed, or when a high-tier change has a failing check or
-   no stated way back.
+   ran, when an important finding was not fixed, when a test did not pass, when a high-tier change
+   has another failing check or no stated way back, or when a change to a configured high-tier path
+   has no tests that ran. The check that decides whether a record counts applies the same rules.
 4. `git commit` runs the hooks. The commit is refused unless every file it changes, in exactly the
    form being committed, appears in a valid record. The commit message then gains trailers naming
    the record, the tier, the author, the reviewer and `Human-Review: pending`. A work-in-progress
@@ -86,7 +87,7 @@ The commands a person uses:
 | `review.py status` | lists the records awaiting a person, highest tier first, and any file changed since its review |
 | `review.py status --all` | the same across every ambient repository on the machine |
 | `review.py signoff <id> --by <name>` | records the verdict; refused while the file on disk differs from the reviewed one, unless `--force` is given, which writes the difference into the record |
-| `review.py pr-body --base <branch>` | a summary of the records for a pull request description |
+| `review.py pr-body --base <branch>` | the pull request description: each record's explanation, checks, findings and way back, any file no record covers, and the blob reviewed for every file with a `git ls-tree` command that confirms it |
 
 In a repository with the kit committed these are run as `python3 .review/bin/review.py`, and
 elsewhere as `python3 ~/os-aid-review-kit/kit/review.py`.

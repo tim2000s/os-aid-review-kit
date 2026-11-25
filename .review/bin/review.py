@@ -43,6 +43,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -164,7 +165,12 @@ def span_of(base=None, tip=None):
     tip = tip or "HEAD"
     if base == ":root":  # everything the tip holds, as for a first push
         return git("hash-object", "-t", "tree", "/dev/null"), git("rev-parse", tip)
-    return git("merge-base", base, tip), git("rev-parse", tip)
+    p = subprocess.run(["git", "merge-base", base, tip], capture_output=True, **UTF8)
+    if p.returncode == 1 and not p.stdout.strip():
+        # unrelated histories, as after a rewrite: nothing is shared, so everything the tip holds is new
+        print(f"review: {tip} shares no history with {base}, so it is measured from the empty tree", file=sys.stderr)
+        return span_of(":root", tip)
+    return git("merge-base", base, tip), git("rev-parse", tip)  # any other failure (a bad ref) still stops here
 
 
 def changed(span):
@@ -220,23 +226,39 @@ def load_records():
 
 
 def invalid(rec, cfg):
-    """Why a record cannot count as coverage, or None. Catches hand-made and inconsistent records."""
-    need = {"id", "tier", "author", "reviewer", "files", "checks", "explanation", "human_review"}
+    """Why a record cannot count as coverage, or None. `record` refuses on the same rules, so a record
+    found in a tree or the ledger is held to exactly what its creation was."""
+    need = {"id", "tier", "author", "reviewer", "files", "checks", "findings", "explanation", "human_review"}
     if not isinstance(rec, dict) or need - rec.keys():
         return f"missing {sorted(need - rec.keys()) if isinstance(rec, dict) else 'everything'}"
     if rec["human_review"].get("status") == "changes-requested":
         return "a human reviewer asked for changes"
+    for f in rec["findings"]:
+        if f.get("label") not in ("important", "nit", "pre-existing") or not f.get("disposition"):
+            return f"a finding needs a label (important/nit/pre-existing) and a disposition: {f}"
+        if f["label"] == "important" and f["disposition"] != "fixed":
+            return f"an important finding must be fixed before commit: {f.get('summary')}"
     if not rec["checks"] or not any(c.get("name", "").startswith("lint") for c in rec["checks"]):
         return "no checks recorded"
+    tests = [c for c in rec["checks"] if c.get("name", "").startswith("tests")]
+    failed = [c["name"] for c in tests if c.get("result") not in ("pass", "not configured")]
+    if failed:
+        return f"tests that did not pass: {', '.join(failed)}"
     for f in rec["files"]:
         now = tier_of(f["path"], cfg)[0]
         if now and TIERS.index(now) > TIERS.index(f.get("tier", "low")):
             return f"{f['path']} is {now} tier now but was recorded as {f.get('tier')}"
     if rec["tier"] == "high" or any(f.get("tier") == "high" for f in rec["files"]):
-        if any(c.get("result") != "pass" for c in rec["checks"]):
-            return "high tier with a check that did not pass"
+        failed = [c["name"] for c in rec["checks"] if c.get("result") not in ("pass", "not configured")]
+        if failed:
+            return f"a high-tier change needs every check to pass; not passing: {', '.join(failed)}"
         if not rec.get("way_back"):
-            return "high tier without a way back"
+            return "a high-tier change needs --way-back (how to undo it once used)"
+        # the dose path needs tests; gate configuration is high tier so it cannot loosen itself, not for this
+        dose = [f["path"] for f in rec["files"] if tier_of(f["path"], cfg)[1].startswith("matches")
+                and tier_of(f["path"], cfg)[0] == "high"]
+        if dose and not any(c.get("result") == "pass" for c in tests):
+            return f"a change to {dose[0]} needs tests that ran and passed; name them under [tests] in tiers.toml"
     return None
 
 
@@ -388,9 +410,13 @@ def cmd_checks(a):
         except FileNotFoundError:
             results.append({"name": name, "result": "not run", "detail": f"{command[0]} is not installed"})
         print(f"{results[-1]['result']:8} {name}  {results[-1]['detail']}")
+    if not cfg.get("tests"):
+        # said in the record, so a reader is not left to infer it from a test row that is missing
+        results.append({"name": "tests", "result": "not configured", "detail": "no [tests] in tiers.toml"})
+        print("not configured  tests")
     with open(LAST_CHECKS, "w", encoding="utf-8") as f:
         json.dump({"base": a.base, "blobs": blobs, "checks": results}, f, indent=1)
-    return 1 if any(r["result"] != "pass" for r in results) else 0
+    return 1 if any(r["result"] not in ("pass", "not configured") for r in results) else 0
 
 
 def cmd_secrets(a):
@@ -442,18 +468,8 @@ def cmd_record(a):
                          "range; run it again with the same arguments")
     with open(a.findings, encoding="utf-8") if a.findings else open(os.devnull, encoding="utf-8") as fh:
         findings = json.loads(fh.read() or "[]")
-    for f in findings:
-        if f.get("label") not in ("important", "nit", "pre-existing") or not f.get("disposition"):
-            raise SystemExit(f"review: finding needs a label (important/nit/pre-existing) and a disposition: {f}")
-        if f["label"] == "important" and f["disposition"] != "fixed":
-            raise SystemExit(f"review: an important finding must be fixed before commit: {f['summary']}")
     tiers = {p: tier_of(p, cfg) for p in files}
     tier = max((t for t, _ in tiers.values()), key=TIERS.index)
-    failed = [c["name"] for c in last["checks"] if c["result"] != "pass"]
-    if tier == "high" and failed:
-        raise SystemExit(f"review: a high-tier change needs every check to pass; failing: {', '.join(failed)}")
-    if tier == "high" and not a.way_back:
-        raise SystemExit("review: a high-tier change needs --way-back (how to undo it once used)")
     now = datetime.datetime.now(datetime.UTC)
     with open(a.explanation, encoding="utf-8") as fh:
         explanation = fh.read()
@@ -477,6 +493,9 @@ def cmd_record(a):
         # a committed record stays free of local paths; a ledger record needs them to be found again
         rec["repo"] = os.getcwd()
         rec["origin"] = re.sub(r"//[^/@]+@", "//", git("remote", "get-url", "origin", check=False))  # no tokens
+    why = invalid(rec, cfg)
+    if why:
+        raise SystemExit(f"review: {why}")
     path = write(rec)
     if not AMBIENT:
         git("add", path)
@@ -546,6 +565,14 @@ def on_disk(path):
         return subprocess.run(["git", "hash-object", "--stdin"], input=os.fsencode(os.readlink(path)),
                               capture_output=True, check=True).stdout.decode().strip()
     return git("hash-object", path)
+
+
+def drifted(f):
+    """Whether a recorded file is no longer on disk as it was reviewed: changed, gone, or back after
+    a reviewed deletion."""
+    if f["blob"] == DELETED:
+        return os.path.lexists(f["path"])
+    return not os.path.lexists(f["path"]) or on_disk(f["path"]) != f["blob"]
 
 
 def uncovered(span, cfg):
@@ -641,9 +668,9 @@ def cmd_status(a):
     latest = {}
     for r in recs:
         for f in r["files"]:
-            latest[f["path"]] = (f["blob"], r["id"])
-    for path, (b, rid) in sorted(latest.items()):
-        if b != DELETED and os.path.lexists(path) and on_disk(path) != b:
+            latest[f["path"]] = (f, r["id"])
+    for path, (f, rid) in sorted(latest.items()):
+        if os.path.lexists(path) and drifted(f):  # a missing file may only belong to another branch
             print(f"changed  {path}: differs from the content reviewed in {rid}")
     if not pending:
         print("review: no records await human review")
@@ -652,8 +679,7 @@ def cmd_status(a):
 def cmd_signoff(a):
     recs = {r["id"]: r for r in load_records()}
     rec = recs.get(a.id) or sys.exit(f"review: no record {a.id}")
-    drift = [f["path"] for f in rec["files"]
-             if f["blob"] != DELETED and os.path.lexists(f["path"]) and on_disk(f["path"]) != f["blob"]]
+    drift = [f["path"] for f in rec["files"] if drifted(f)]
     if drift and not a.force:
         raise SystemExit("review: these files differ from the reviewed content, so a sign-off would not "
                          f"describe what is on disk: {', '.join(drift)} (use --force to sign the record anyway)")
@@ -662,7 +688,13 @@ def cmd_signoff(a):
     print(write(rec))
 
 
+def cell(text):
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
 def cmd_pr_body(a):
+    """The evidence behind a branch, written for the maintainer who reads the pull request: each
+    record in full, then every file with the content that was reviewed and a command to confirm it."""
     cfg = config()
     span = span_of(a.base)
     recs = records_at(span[1])
@@ -670,15 +702,45 @@ def cmd_pr_body(a):
     files = reviewable(span, cfg)
     keyed = {p: (p, blob(p, span[1], s)) for p, s in files.items()}
     ids = sorted({cov[k] for k in keyed.values() if k in cov})
-    print("## Review records\n")
+    missing = uncovered(span, cfg)
+    print("## Verification\n")
+    upstream = len(files) - len(missing) - sum(k in cov for k in keyed.values())
+    print(f"Measured at commit `{span[1]}` against `{span[0]}`. {len(files) - len(missing) - upstream} of "
+          f"{len(files)} changed files are in a valid review record in exactly the form this pull request holds"
+          + (f", and {upstream} are upstream's own content, taken in by a merge." if upstream else "."))
     for r in (r for r in recs if r["id"] in ids):
         h = r["human_review"]
-        print(f"- `{r['id']}`: {r['tier']} tier, written by {r['author']}, reviewed by {r['reviewer']}; "
-              f"{sum(c['result'] == 'pass' for c in r['checks'])}/{len(r['checks'])} checks passed; "
-              f"{len(r['findings'])} finding(s); human review {h['status']}")
-    unrev = [p for p, k in keyed.items() if k not in cov]
-    if unrev:
-        print("\nNot covered by any valid record in their current form: " + ", ".join(f"`{p}`" for p in unrev))
+        human = ("No person has signed it off yet." if h["status"] == "pending" else
+                 f"Human review: {h['status']} by {h['by']} on {h['date']}. {h.get('notes') or ''}".strip())
+        if h.get("files_differ_at_signoff"):
+            human += (" It was signed while these files differed from the reviewed content: "
+                      + ", ".join(f"`{p}`" for p in h["files_differ_at_signoff"]) + ".")
+        print(f"\n### Record `{r['id']}`\n\n{r['tier'].capitalize()} tier. Written by {r['author']}. "
+              f"Reviewed by {r['reviewer']}. {human}\n")
+        print(f"#### What it changes and what could go wrong\n\n{r['explanation'].strip()}\n")
+        print("#### Checks, run on the reviewed content\n\n| Check | Result | Detail |\n|---|---|---|")
+        print("\n".join(f"| {cell(c['name'])} | {c['result']} | {cell(c.get('detail', ''))} |" for c in r["checks"]))
+        if not any(c["name"].startswith("tests") for c in r["checks"]):
+            print("\nNo tests ran for this record.")
+        print("\n#### Review findings\n")
+        if r["findings"]:
+            print("| Label | Finding | Outcome |\n|---|---|---|")
+            print("\n".join(f"| {f['label']} | {cell(f['summary'])} | {cell(f['disposition'])} |"
+                            for f in r["findings"]))
+        else:
+            print("The reviewer reported no findings.")
+        print(f"\n#### Way back\n\n{r.get('way_back') or 'Not stated.'}")
+    if missing:
+        print("\n### Not covered\n\nThese files are in no valid record in their current form: "
+              + ", ".join(f"`{p}`" for p in missing))
+    print("\n<details><summary>Files and the content reviewed</summary>\n")
+    print("| File | Blob reviewed | Record |\n|---|---|---|")
+    print("\n".join(f"| `{cell(p)}` | `{b}` | {cov.get((p, b), 'none')} |" for p, (_, b) in sorted(keyed.items())))
+    live = [p for p, s in sorted(files.items()) if s != "D"]
+    if live:
+        print("\nTo confirm each blob is the one in this pull request, compare the third column of:\n\n"
+              f"    git ls-tree -r {span[1]} -- {' '.join(shlex.quote(p) for p in live)}")
+    print("\n</details>")
 
 
 def cmd_trailers(a):

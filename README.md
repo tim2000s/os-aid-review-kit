@@ -95,8 +95,11 @@ write it, then `review.py record`. The record holds:
 - the author's own account of what the change does and what could go wrong
 - the way back, required for high tier, and the human review, which starts as pending
 
-An important finding that was not fixed, a high-tier change with a failing check, and a high-tier
-change without a way back are all refused. Commits carry `Review-Record`, `Review-Tier`,
+An important finding that was not fixed, a test that did not pass at any tier, a high-tier change
+with any other failing check or without a way back, and a change to a configured high-tier path
+(the dose path) without tests that ran are all refused. A repository with no tests configured says
+so in every record, as a `tests` row marked "not configured". The same rules decide whether a
+record found later counts, so a record edited by hand is held to what its creation was. Commits carry `Review-Record`, `Review-Tier`,
 `Written-By`, `Reviewed-By` and `Human-Review` trailers. `review.py status` shows what awaits a
 person; `review.py signoff` records their verdict and refuses when the file on disk has changed
 since the review.
@@ -107,7 +110,7 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (123
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (135
 tests; the tests for each behaviour were run against a deliberately broken version of it and failed
 there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.
@@ -208,4 +211,5 @@ handling for cases that cannot occur.
   using LFS sets its own `core.hooksPath` and is then outside the gate.
 - A clean `git merge` runs `pre-merge-commit`, not `pre-commit`, so merges are gated at push only.
 - The records live in the repository. A pull request to an upstream that does not want `.review/`
-  carries the `pr-body` summary in its description instead.
+  carries the `pr-body` summary in its description instead. In ambient mode that summary is the
+  only part of the record a maintainer sees, since the ledger stays on the developer's machine.

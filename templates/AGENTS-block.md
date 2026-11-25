@@ -26,7 +26,9 @@ lets a human reviewer later see what was checked and whether it has changed sinc
 
 On Windows, where `python3` is often missing, run the scripts as `sh .review/bin/py .review/bin/review.py ...`.
 `python3 .review/bin/review.py status` lists what awaits a human, highest tier first. A human
-reviewer signs off with `review.py signoff <id> --by <name>`.
+reviewer signs off with `review.py signoff <id> --by <name>`. For a pull request, write the description with
+`review.py pr-body --base <branch> | gh pr create --body-file -`, so
+the maintainer sees the records, checks and findings in the pull request itself.
 
 Rules that hold whatever the tool says:
 

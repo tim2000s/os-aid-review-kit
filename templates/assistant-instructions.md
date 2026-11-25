@@ -16,6 +16,9 @@ every system; in a repository with the kit committed, `.review/bin/review.py` is
    adding `--way-back "<how to undo it>"` for high-tier code.
 4. Commit. The hooks refuse a commit whose files are in no record, and add the review details to
    the commit message.
+5. For a pull request, write its description with
+   `review.py pr-body --base <branch> | gh pr create --body-file -`. In a repository without the kit committed the
+   records stay on this machine, so the description is the only evidence the maintainer sees.
 
 Never skip or switch off the hooks (`--no-verify`, `git commit -n`, `core.hooksPath`, `LEFTHOOK=0`),
 never edit a review record by hand, and never run `review.py signoff`, which is for the person who

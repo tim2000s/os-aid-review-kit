@@ -1025,3 +1025,126 @@ def test_off_leaves_settings_without_the_guard_untouched(tmp_path):
     subprocess.run([PY, os.path.join(KIT, "kit", "global.py"), "off"], env=env, capture_output=True)
     assert (home / ".claude" / "settings.json").read_text() == '{"model": "x"}'
     assert (home / ".claude" / "CLAUDE.md").read_text() == "Mine.\n"
+
+
+# Review of 25 November 2026: the gate's evidence has to be true before a pull request shows it.
+
+def test_a_linter_that_prints_nothing_fails_the_gate(repo, tmp_path):
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "ruff").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "ruff").chmod(0o755)
+    stage_change(repo)
+    p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False,
+           env={"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"})
+    assert p.returncode == 2 and "printed nothing" in p.stderr, p.stdout + p.stderr
+
+
+def with_tests(r, command):
+    tiers = r / ".review" / "tiers.toml"
+    tiers.write_text(tiers.read_text() + f'unit = "{command}"\n')
+    sh(r, "git", "add", ".review/tiers.toml")
+    sh(r, "git", "commit", "-qm", "tests", "--no-verify")
+
+
+def test_failing_tests_refuse_a_record_at_any_tier(repo):
+    with_tests(repo, "false")
+    stage_change(repo)
+    review(repo, "checks")
+    p = record(repo)
+    assert p.returncode != 0 and "tests that did not pass: tests: unit" in p.stderr
+
+
+def test_a_record_edited_after_creation_is_held_to_the_same_rules(repo):
+    stage_change(repo)
+    review(repo, "checks")
+    path = repo / record(repo).stdout.strip()
+    assert review(repo, "check").returncode == 0
+    text = path.read_text()
+    path.write_text(text.replace('"findings": []', '"findings": [{"label": "important", "summary": "x", '
+                                                   '"disposition": "accepted"}]'))
+    sh(repo, "git", "add", str(path))
+    assert review(repo, "check").returncode == 1
+    assert "must be fixed" in review(repo, "status").stdout
+
+
+@pytest.mark.skipif(not (shutil.which("semgrep") and shutil.which("trufflehog")), reason="scanners not installed")
+def test_high_tier_needs_tests_that_ran(repo):
+    tiers = repo / ".review" / "tiers.toml"
+    tiers.write_text(tiers.read_text().replace("[high]\npaths = []", '[high]\npaths = ["app.py"]'))
+    sh(repo, "git", "add", ".review/tiers.toml")
+    sh(repo, "git", "commit", "-qm", "high", "--no-verify")
+    stage_change(repo)
+    review(repo, "checks")
+    p = record(repo, way_back="git revert")
+    assert p.returncode != 0 and "needs tests that ran" in p.stderr, p.stderr
+    sh(repo, "git", "stash", "-q")
+    with_tests(repo, "true")
+    sh(repo, "git", "stash", "pop", "-q")
+    sh(repo, "git", "add", "app.py")
+    assert review(repo, "checks").returncode == 0
+    assert record(repo, way_back="git revert").returncode == 0
+
+
+def test_signoff_counts_a_missing_or_returned_file_as_drift(repo):
+    stage_change(repo)
+    review(repo, "checks")
+    rid = os.path.basename(record(repo).stdout.strip())[:-3]
+    sh(repo, "git", "commit", "-qm", "change", "--no-verify")
+    (repo / "app.py").unlink()
+    assert "changed  app.py" not in review(repo, "status").stdout  # it may belong to another branch
+    p = review(repo, "signoff", rid, "--by", "A Person")
+    assert p.returncode != 0 and "app.py" in p.stderr
+    sh(repo, "git", "checkout", "app.py")
+    sh(repo, "git", "rm", "-q", "app.py")
+    review(repo, "checks")
+    rid = os.path.basename(record(repo).stdout.strip())[:-3]
+    sh(repo, "git", "commit", "-qm", "delete", "--no-verify")
+    (repo / "app.py").write_text("back\n")
+    assert "changed  app.py" in review(repo, "status").stdout
+    p = review(repo, "signoff", rid, "--by", "A Person")
+    assert p.returncode != 0 and "app.py" in p.stderr
+
+
+def test_pr_body_shows_the_evidence_and_the_content_it_covers(repo):
+    base = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    stage_change(repo)
+    review(repo, "checks")
+    record(repo, findings=[{"label": "nit", "summary": "a | b", "disposition": "left as is"}])
+    sh(repo, "git", "commit", "-qm", "change", "--no-verify")
+    (repo / "other.py").write_text("B = 1\n")
+    sh(repo, "git", "add", "other.py")
+    sh(repo, "git", "commit", "-qm", "unreviewed", "--no-verify")
+    out = review(repo, "pr-body", "--base", base).stdout
+    assert "Could break callers that expect 1." in out and "| nit | a \\| b | left as is |" in out
+    assert "| tests | not configured |" in out and "1 of 2 changed files" in out
+    assert "in no valid record in their current form: `other.py`" in out
+    shown = next(line for line in out.splitlines() if line.startswith("| `app.py` |")).split("`")[3]
+    command = next(line.strip() for line in out.splitlines() if line.strip().startswith("git ls-tree"))
+    listed = sh(repo, *command.split()).stdout
+    assert f"{shown}\tapp.py" in listed
+    assert shown == sh(repo, "git", "rev-parse", "HEAD:app.py").stdout.strip()
+
+
+def test_pr_body_reads_the_ledger_in_ambient_mode(plain, tmp_path):
+    base = sh(plain, "git", "rev-parse", "HEAD").stdout.strip()
+    stage_change(plain)
+    ambient(plain, "checks")
+    assert ambient_record(plain, tmp_path).returncode == 0
+    sh(plain, "git", "commit", "-qm", "change")
+    out = ambient(plain, "pr-body", "--base", base).stdout
+    assert "### Record `" in out and "Changes f to return 2." in out and "1 of 1 changed files" in out
+
+
+def test_pr_body_says_when_a_signoff_was_forced_over_changed_files(repo):
+    base = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    stage_change(repo)
+    review(repo, "checks")
+    rid = os.path.basename(record(repo).stdout.strip())[:-3]
+    sh(repo, "git", "commit", "-qm", "change", "--no-verify")
+    (repo / "app.py").write_text("changed on disk\n")
+    assert review(repo, "signoff", rid, "--by", "A Person", "--force").returncode == 0
+    sh(repo, "git", "checkout", "app.py")
+    sh(repo, "git", "commit", "-qam", "signoff", "--no-verify")
+    out = review(repo, "pr-body", "--base", base).stdout
+    assert "approved by A Person" in out and "differed from the reviewed content: `app.py`" in out

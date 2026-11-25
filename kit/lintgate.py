@@ -108,13 +108,14 @@ def need(tool):
 
 def run_sarif(cmd, root, findings_rc=()):
     """Run a linter that prints SARIF. Exit 0, or a code the tool uses for 'found issues', with
-    parseable output counts; anything else (including silence with a failing code) is a failure."""
+    parseable output counts; anything else, silence included, is a failure."""
     name, cmd = cmd[0], [need(cmd[0]), *cmd[1:]]  # messages name the tool, not its resolved path
     p = subprocess.run(cmd, cwd=root, capture_output=True, **UTF8)
     if p.returncode not in (0, *findings_rc) or (p.returncode != 0 and not p.stdout.strip()):
         raise LinterFailed(f"{name} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:400]}")
     if not p.stdout.strip():
-        return []
+        # every supported linter prints a SARIF document even when it finds nothing
+        raise LinterFailed(f"{name} printed nothing, so what it found is unknown")
     try:
         return parse_sarif(p.stdout, root)
     except (ValueError, KeyError) as e:
