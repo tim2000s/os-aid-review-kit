@@ -53,6 +53,22 @@ def biome(files, root):
     return run_sarif(cmd + files, root, findings_rc=(1,))
 
 
+def ktlint_configured(*specs):
+    """ktlint's default style is nobody's in particular, so it runs only where the repository set it up:
+    ktlint in an .editorconfig, a Gradle build or a version catalogue. Asked of git once for both sides
+    of the change, so that adding or removing the setup cannot make one side's findings look new."""
+    for spec in specs:
+        where = [spec] if spec else []  # '' is the index, which git grep reads with --cached
+        p = subprocess.run(["git", "grep", "-q", "-i", *(["--cached"] if not spec else []), "ktlint", *where, "--",
+                            "*.editorconfig", "*.gradle", "*.gradle.kts", "*.versions.toml"],
+                           capture_output=True, **UTF8)
+        if p.returncode not in (0, 1):
+            raise LinterFailed(f"could not tell whether ktlint is set up: {p.stderr.strip()[:400]}")
+        if p.returncode == 0:
+            return True
+    return False
+
+
 def ktlint(files, root):
     return run_sarif(["ktlint", "--reporter=sarif", *files], root, findings_rc=(1,))
 
@@ -211,10 +227,12 @@ def ruff_fallback(*roots):
         shutil.copy(os.path.join(src, "ruff-ambient.toml"), os.path.join(r, "ruff.toml"))
 
 
-def lint_tree(root, paths):
+def lint_tree(root, paths, skip=()):
     by_linter = collections.defaultdict(list)
     for p in paths:
         for name, fn, needs in LANGUAGES[language_of(p)][1]:
+            if name in skip:
+                continue
             needs = (needs,) if isinstance(needs, str) else needs
             if needs and not any(os.path.exists(os.path.join(root, n)) for n in needs):
                 continue
@@ -237,7 +255,7 @@ def new_findings(before, after, added):
     return [f for f in after if f["path"] in added or new[key(f)] > old[key(f)]]
 
 
-def fix_added(files):
+def fix_added(files, skip=()):
     """Format files the change adds, unless they carry unstaged edits that `git add` would sweep in."""
     for status, path in files:
         if status != "A":
@@ -246,6 +264,8 @@ def fix_added(files):
             print(f"lintgate: {path} has unstaged edits, not formatting it; run the formatter by hand")
             continue
         fmt = LANGUAGES[language_of(path)][2]
+        if fmt[0] in skip:
+            continue  # a formatter the repository has not chosen would rewrite the file into its style
         if shutil.which(fmt[0]):
             subprocess.run([shutil.which(fmt[0]), *fmt[1:], path], capture_output=True)
             subprocess.run(["git", "add", "--", path], check=True)
@@ -291,8 +311,14 @@ def main(argv=None):
             skipped.append(path)
     for p in skipped:
         print(f"lintgate: not linted here ({language_of(p)} is not in --languages): {p}")
+    try:
+        skip = () if not any(language_of(p) == "kotlin" for _, p in files) or ktlint_configured(
+            old_spec, new_spec) else ("ktlint",)
+    except LinterFailed as e:
+        print(f"lintgate: {e}", file=sys.stderr)
+        return 2
     if a.fix and a.staged:
-        fix_added(files)
+        fix_added(files, skip)
     added = {p for s, p in files if s == "A" or a.mode == "greenfield" or not has_head}
     paths = [p for _, p in files]
     olds = [p for p in paths if p not in added]
@@ -302,8 +328,8 @@ def main(argv=None):
             materialise(after_root, new_spec, paths, fallback=old_spec)
             materialise(before_root, old_spec, olds, fallback=new_spec)
             ruff_fallback(after_root, before_root)
-            after = lint_tree(after_root, paths)
-            before = lint_tree(before_root, olds)
+            after = lint_tree(after_root, paths, skip)
+            before = lint_tree(before_root, olds, skip)
     except LinterFailed as e:
         print(f"lintgate: {e}", file=sys.stderr)
         return 2

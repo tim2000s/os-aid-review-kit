@@ -13,3 +13,8 @@ Concerns that recur in this kit. Label findings important, nit or pre-existing.
 - Test fixtures and examples use fake credentials. On 20 November 2026 a real Nightscout read token
   went into `tests/semgrep_targets/` and was removed from history before the first push; the kit's
   TruffleHog detector would have caught it at commit, had the kit been installed on itself.
+- A linter runs only where the repository has chosen it, since a default style counts code written to
+  match its neighbours as new findings. On 25 November 2026 ktlint ran with its own default style on
+  Boost-autoconfig-rerun, which has no ktlint setup: 703 findings, about 80 of them counted as new, and
+  its formatter rewrote two added files away from the repository's style. The test
+  `test_ktlint_and_its_formatter_run_only_where_the_repository_set_ktlint_up` now catches it.

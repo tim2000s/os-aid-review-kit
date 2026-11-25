@@ -1055,6 +1055,66 @@ def test_a_linter_that_prints_nothing_fails_the_gate(repo, tmp_path):
     assert p.returncode == 2 and "printed nothing" in p.stderr, p.stdout + p.stderr
 
 
+def test_ktlint_and_its_formatter_run_only_where_the_repository_set_ktlint_up(repo, tmp_path):
+    # Boost-autoconfig-rerun, 25 November 2026: no ktlint setup, 703 findings in ktlint's own style, and
+    # two added files rewritten by its formatter to differ from the files around them
+    stub, ran = tmp_path / "bin", tmp_path / "ran"
+    stub.mkdir()
+    if sys.platform == "win32":
+        (stub / "ktlint.cmd").write_text(f"@echo x>>\"{ran}\"\r\n@exit /b 0\r\n")
+    else:
+        (stub / "ktlint").write_text(f"#!/bin/sh\necho x >> '{ran}'\nexit 0\n")
+        (stub / "ktlint").chmod(0o755)
+    env = {"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"}
+    (repo / "A.kt").write_text("fun a() = 1\n")
+    sh(repo, "git", "add", "A.kt")
+    p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", "--fix", check=False, env=env)
+    assert p.returncode == 0 and not ran.exists(), p.stdout + p.stderr
+    for setup, text in ((".editorconfig", "[*.{kt,kts}]\nktlint_code_style = android_studio\n"),
+                        ("build.gradle.kts", 'plugins { id("org.jlleitschuh.gradle.ktlint") }\n')):
+        sh(repo, "git", "rm", "-q", "--cached", "--ignore-unmatch", ".editorconfig")
+        (repo / setup).write_text(text)
+        sh(repo, "git", "add", setup)
+        p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False, env=env)
+        assert ran.exists() and p.returncode == 2 and "printed nothing" in p.stderr, setup + p.stdout + p.stderr
+        ran.unlink()
+
+
+def test_ktlint_setup_is_found_at_any_depth_and_a_git_error_fails(repo, monkeypatch):
+    sys.path.insert(0, os.path.join(KIT, "kit"))
+    import lintgate
+    monkeypatch.chdir(repo)
+    assert not lintgate.ktlint_configured("HEAD", "")
+    (repo / "app").mkdir()
+    (repo / "app" / ".editorconfig").write_text("[*.kt]\nktlint_code_style = android_studio\n")
+    sh(repo, "git", "add", "app/.editorconfig")
+    assert lintgate.ktlint_configured("HEAD", "")
+    with pytest.raises(lintgate.LinterFailed):
+        lintgate.ktlint_configured("no-such-ref")
+
+
+def test_adding_ktlint_setup_does_not_make_inherited_findings_new(repo, tmp_path):
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    sarif = json.dumps({"runs": [{"results": [{"ruleId": "std:x", "message": {"text": "m"}, "locations": [
+        {"physicalLocation": {"artifactLocation": {"uri": "A.kt"}, "region": {"startLine": 1}}}]}]}]})
+    if sys.platform == "win32":
+        (stub / "ktlint.cmd").write_text(f"@echo {sarif}\r\n@exit /b 1\r\n")
+    else:
+        (stub / "ktlint").write_text(f"#!/bin/sh\necho '{sarif}'\nexit 1\n")
+        (stub / "ktlint").chmod(0o755)
+    env = {"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"}
+    (repo / "A.kt").write_text("fun a() = 1\n")
+    (repo / ".editorconfig").write_text("root = true\n")
+    sh(repo, "git", "add", ".")
+    sh(repo, "git", "commit", "-qm", "kt", "--no-verify")
+    (repo / "A.kt").write_text("fun a() = 2\n")
+    (repo / ".editorconfig").write_text("root = true\n[*.kt]\nktlint_code_style = android_studio\n")
+    sh(repo, "git", "add", ".")
+    p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False, env=env)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
 def with_tests(r, command):
     tiers = r / ".review" / "tiers.toml"
     tiers.write_text(tiers.read_text() + f'unit = "{command}"\n')
