@@ -125,6 +125,8 @@ def deploy(update=False):
                          "`global.py update`, or deletes it and runs `global.py on`")
     if os.path.normcase(os.path.realpath(SOURCE)) == os.path.normcase(os.path.realpath(RUNTIME)):
         raise SystemExit("global: the live copy cannot be copied onto itself; it names no checkout to copy from")
+    if sys.version_info < (3, 11, 4):
+        raise SystemExit("global: making the live copy needs Python 3.11.4 or newer, for tarfile's data filter")
     new, old = RUNTIME + ".new", RUNTIME + ".old"
     shutil.rmtree(new, ignore_errors=True)
     os.makedirs(new)
@@ -132,11 +134,9 @@ def deploy(update=False):
         head = kit_git("rev-parse", "HEAD")
         tar = subprocess.run(["git", "-C", SOURCE, "archive", "--format=tar", head, *PARTS], capture_output=True,
                              check=True).stdout
+        # nosemgrep: tarfile-extractall-traversal - the data filter refuses members that leave `new`
         with tarfile.open(fileobj=io.BytesIO(tar)) as t:
-            try:
-                t.extractall(new, filter="data")
-            except TypeError:  # Python 3.11 before 3.11.4 has no filter; the archive comes from git itself
-                t.extractall(new)  # noqa: S202 nosemgrep
+            t.extractall(new, filter="data")
         if update:
             try:
                 if subprocess.run(["git", "-C", SOURCE, "merge-base", "--is-ancestor", deployed(), head]).returncode:

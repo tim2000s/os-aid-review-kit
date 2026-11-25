@@ -162,7 +162,7 @@ there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; ru
 
 ## Requirements
 
-Python 3.11 or newer for the scripts, which use only the standard library, and Git. `kit/py` finds
+Python 3.11.4 or newer for the scripts, which use only the standard library, and Git. `kit/py` finds
 the interpreter (`python3`, `python` or `py -3`), so the hooks work where Windows provides no
 `python3`. The tools, by system:
 
