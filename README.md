@@ -15,9 +15,11 @@ rather than a judgement.
 
 In the repository you are working in, ask Claude Code, Codex or Gemini CLI:
 
-> Set up the OS-AID review kit in this repository: clone https://github.com/tim2000s/os-aid-review-kit
+> Set up the OS-AID review kit in this repository: clone https://github.com/nightscout/osaid-review
 > to ~/os-aid-review-kit if it isn't there, run `sh ~/os-aid-review-kit/kit/py ~/os-aid-review-kit/kit/enable.py`,
 > and do what it says.
+
+The repository is private for now, so the clone works only for members of the nightscout organisation.
 
 `enable.py` turns the gate on for that repository alone. It sets the repository's own hooks path to
 the kit and commits nothing, so a fork of AndroidAPS or Trio carries no kit files into a pull request.

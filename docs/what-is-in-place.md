@@ -1,6 +1,6 @@
 # The review gate on this machine: what is in place
 
-20 November 2026. Kit repository `tim2000s/os-aid-review-kit` (private).
+20 November 2026. Kit repository `nightscout/osaid-review` (private), first published as `tim2000s/os-aid-review-kit`.
 
 ## Purpose
 
