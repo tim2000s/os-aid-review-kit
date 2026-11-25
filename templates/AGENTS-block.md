@@ -5,8 +5,9 @@ Every change to a file outside `.review/tiers.toml`'s exempt list is reviewed an
 is committed. The record names each file with the hash of the exact content reviewed, which is what
 lets a human reviewer later see what was checked and whether it has changed since.
 
-1. Make the smallest change that does the job, then run the formatter and linter for each language touched. `lefthook` runs
-   them on commit; running them first saves a failed commit.
+1. Make the smallest change that does the job, then run the linter for each language touched; `lefthook`
+   runs it on commit, and running it first saves a failed commit. The kit formats nothing, and a
+   formatter is run only where the repository already uses one.
 2. Stage the change and run `python3 .review/bin/review.py checks`. It runs the lint gate (new
    findings only), the secret scan, the kit's Semgrep rules and the tests named in
    `.review/tiers.toml`, and remembers the results against the staged content.

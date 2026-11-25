@@ -386,9 +386,6 @@ def cmd_checks(a):
                              f"part of this {'commit' if a.base is None else 'range'}: {', '.join(dirty[:8])}"
                              f"{' ...' if len(dirty) > 8 else ''}. Run `git stash push --keep-index "
                              "--include-untracked`, rerun, then `git stash pop`.")
-    if a.base is None:
-        # formatting added files happens here, before the blobs are taken, so the record matches the commit
-        subprocess.run([*lint, "--staged", "--fix", "--quiet"], capture_output=True)
     span, files, blobs = scope(a, cfg)
     # a symlink's content is its target's path; semgrep refuses one as a scan root
     live = [p for p, s in files.items() if s != "D" and not os.path.islink(p)]

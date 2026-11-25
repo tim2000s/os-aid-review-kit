@@ -39,7 +39,7 @@ for Kotlin, Swift, Python and JavaScript and adds configuration only for what it
 
 | Layer | Tools | Files |
 |---|---|---|
-| Lint and format | ktlint and detekt, SwiftLint and SwiftFormat, Ruff and mypy, Biome | `detekt.yml`, `.swiftlint.yml`, `.swiftformat`, `ruff.toml`, `mypy.ini`, `biome.json` |
+| Lint | ktlint and detekt, SwiftLint, Ruff and mypy, Biome (its formatter switched off) | `detekt.yml`, `.swiftlint.yml`, `ruff.toml`, `mypy.ini`, `biome.json` |
 | Hooks | Lefthook | `lefthook.yml` |
 | Static analysis | Semgrep (registry rules plus the kit's own) | `.semgrep/custom-ai-guardrails.yml` |
 | Dependencies | Trivy, with a CycloneDX SBOM in CI | `trivy.yaml`, `.trivyignore` |
@@ -168,8 +168,8 @@ the interpreter (`python3`, `python` or `py -3`), so the hooks work where Window
 
 | System | Install |
 |---|---|
-| macOS | `brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff` |
-| Linux | Homebrew from brew.sh, then the macOS line without `swiftlint swiftformat` |
+| macOS | `brew install lefthook ktlint detekt swiftlint trufflehog semgrep trivy biome mypy ruff` |
+| Linux | Homebrew from brew.sh, then the macOS line without `swiftlint` |
 | Windows | Git for Windows (its `sh` runs the hooks), Python and Node.js; `py -m pip install ruff mypy semgrep`; `npm install -g @biomejs/biome lefthook`; TruffleHog, and for Kotlin ktlint and detekt-cli, from their release pages |
 
 `uv tool install --python 3.12 codegraphcontext==0.6.13` adds the code graph. `kit-tests.yml` runs

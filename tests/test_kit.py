@@ -1055,7 +1055,7 @@ def test_a_linter_that_prints_nothing_fails_the_gate(repo, tmp_path):
     assert p.returncode == 2 and "printed nothing" in p.stderr, p.stdout + p.stderr
 
 
-def test_ktlint_and_its_formatter_run_only_where_the_repository_set_ktlint_up(repo, tmp_path):
+def test_ktlint_runs_only_where_the_repository_set_ktlint_up(repo, tmp_path):
     # Boost-autoconfig-rerun, 25 November 2026: no ktlint setup, 703 findings in ktlint's own style, and
     # two added files rewritten by its formatter to differ from the files around them
     stub, ran = tmp_path / "bin", tmp_path / "ran"
@@ -1068,7 +1068,7 @@ def test_ktlint_and_its_formatter_run_only_where_the_repository_set_ktlint_up(re
     env = {"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"}
     (repo / "A.kt").write_text("fun a() = 1\n")
     sh(repo, "git", "add", "A.kt")
-    p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", "--fix", check=False, env=env)
+    p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False, env=env)
     assert p.returncode == 0 and not ran.exists(), p.stdout + p.stderr
     for setup, text in ((".editorconfig", "[*.{kt,kts}]\nktlint_code_style = android_studio\n"),
                         ("build.gradle.kts", 'plugins { id("org.jlleitschuh.gradle.ktlint") }\n')):
@@ -1113,6 +1113,16 @@ def test_adding_ktlint_setup_does_not_make_inherited_findings_new(repo, tmp_path
     sh(repo, "git", "add", ".")
     p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_checks_leave_the_staged_files_as_they_were(repo):
+    # 25 November 2026: checks formatted added files and restaged them, which nobody had asked for
+    (repo / "added.py").write_text("x=[1,\n  2]\n")
+    sh(repo, "git", "add", "added.py")
+    staged = sh(repo, "git", "diff", "--cached").stdout
+    review(repo, "checks")
+    assert sh(repo, "git", "diff", "--cached").stdout == staged
+    assert (repo / "added.py").read_text() == "x=[1,\n  2]\n"
 
 
 def with_tests(r, command):

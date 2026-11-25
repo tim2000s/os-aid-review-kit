@@ -16,5 +16,7 @@ Concerns that recur in this kit. Label findings important, nit or pre-existing.
 - A linter runs only where the repository has chosen it, since a default style counts code written to
   match its neighbours as new findings. On 25 November 2026 ktlint ran with its own default style on
   Boost-autoconfig-rerun, which has no ktlint setup: 703 findings, about 80 of them counted as new, and
-  its formatter rewrote two added files away from the repository's style. The test
-  `test_ktlint_and_its_formatter_run_only_where_the_repository_set_ktlint_up` now catches it.
+  `review.py checks` formatted two added files away from the repository's style. The test
+  `test_ktlint_runs_only_where_the_repository_set_ktlint_up` now catches the first. The kit no longer
+  formats anything, since rewriting a file nobody asked to have rewritten changes what was reviewed;
+  `test_checks_leave_the_staged_files_as_they_were` catches that returning.

@@ -118,7 +118,7 @@ plain commit all still need a record.
 | Purpose | Tool and version |
 |---|---|
 | Kotlin | ktlint 1.8.0, detekt 1.23.8 |
-| Swift | SwiftLint 0.65.1, SwiftFormat 0.64.7 |
+| Swift | SwiftLint 0.65.1 |
 | Python | Ruff 0.17.3, mypy 2.4.1 |
 | JavaScript | Biome 2.6.8 |
 | Hooks | lefthook 2.2.2 and the kit's dispatcher |

@@ -44,7 +44,7 @@ Review-Ledger: ~/.review-ledger</code></pre></li>
     <tr><td>Trivy 0.76.2</td><td>Known vulnerabilities rated high or critical in the dependency lockfiles, along with secrets and misconfigured files at the same severity. Vulnerabilities already present on installation can be listed as accepted, so that only new ones fail. On pull requests it also writes a software bill of materials.</td><td>Pushes and pull requests where the kit is committed to the project</td></tr>
   </tbody>
 </table></figure>
-<p>"Checks" means the step the assistant runs before recording a review (<code>review.py checks</code>). The commit hook then confirms that a valid record exists and runs the secret scan again. Where the kit is committed to a project, the commit hook also runs the linters and the kit's Semgrep rules. Ruff, Biome, ktlint and SwiftFormat 0.64.7 can also format newly added files on request; formatting is never applied automatically.</p>
+<p>"Checks" means the step the assistant runs before recording a review (<code>review.py checks</code>). The commit hook then confirms that a valid record exists and runs the secret scan again. Where the kit is committed to a project, the commit hook also runs the linters and the kit's Semgrep rules. The kit formats nothing: it never rewrites a file.</p>
 <p>The linter for a language is needed only where you commit code in that language: Kotlin for AndroidAPS, Swift for Trio, JavaScript for Nightscout, Python for analysis code. A missing linter fails the checks, with a message naming the tool. A high-tier record is then refused, and where the kit is committed to the project the commit itself is refused.</p>
 
 <h3>The kit's own scripts</h3>
@@ -94,8 +94,8 @@ Review-Ledger: ~/.review-ledger</code></pre></li>
 <figure class="wp-block-table"><table>
   <thead><tr><th>System</th><th>Command</th></tr></thead>
   <tbody>
-    <tr><td>macOS</td><td><code>brew install lefthook ktlint detekt swiftlint swiftformat trufflehog semgrep trivy biome mypy ruff</code></td></tr>
-    <tr><td>Linux</td><td>Install Homebrew from brew.sh, then the macOS line without <code>swiftlint swiftformat</code>.</td></tr>
+    <tr><td>macOS</td><td><code>brew install lefthook ktlint detekt swiftlint trufflehog semgrep trivy biome mypy ruff</code></td></tr>
+    <tr><td>Linux</td><td>Install Homebrew from brew.sh, then the macOS line without <code>swiftlint</code>.</td></tr>
     <tr><td>Windows</td><td>Install Git for Windows and Node.js. Install Python too, ticking "Add python.exe to PATH" in the Python installer. Then in Git Bash: <code>py -m pip install ruff mypy semgrep</code> and <code>npm install -g @biomejs/biome lefthook</code>, and check with <code>ruff --version &amp;&amp; semgrep --version</code>. Download <code>trufflehog</code> from its GitHub releases page and put it on your PATH. For Kotlin, also download <code>ktlint</code> and <code>detekt-cli</code> from their releases pages. Trivy is needed only for projects the kit is committed to.</td></tr>
   </tbody>
 </table></figure>

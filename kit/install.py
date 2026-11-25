@@ -36,7 +36,7 @@ MARKERS = {
 }
 EXTENSIONS = {"kotlin": (".kt", ".kts"), "swift": (".swift",), "python": (".py",),
               "javascript": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")}
-BINARIES = {"kotlin": ["ktlint", "detekt"], "swift": ["swiftlint", "swiftformat"], "python": ["ruff", "mypy"],
+BINARIES = {"kotlin": ["ktlint", "detekt"], "swift": ["swiftlint"], "python": ["ruff", "mypy"],
             "javascript": ["biome"], "all": ["lefthook", "trufflehog", "semgrep", "trivy", "git"]}
 GITIGNORE = [".env", ".env.*", "*.pem", "google-services.json", "GoogleService-Info.plist",
              ".review/.last-checks.json", ".review/.test-output.txt", ".review/.test-integration.txt",
@@ -261,21 +261,19 @@ def main(argv=None):
     mode = re.search(r'^mode = "(\w+)"', tiers, re.M).group(1)
     w = Writer(root, a.dry_run)
 
-    # Phase 2: linters and formatters, only for languages present and only where none is configured
+    # Phase 2: linters, only for languages present and only where none is configured; no formatter, since
+    # the kit rewrites nothing and its own formatter settings would read as the repository having one
     if "kotlin" in langs:
         if not any("detekt" in x for x in au["linters"]):
             w.copy("detekt.yml", os.path.join(T, "detekt.yml"))
     if "swift" in langs:
         w.copy(".swiftlint.yml", os.path.join(T, ".swiftlint.yml"))
-        w.copy(".swiftformat", os.path.join(T, ".swiftformat"))
     if "python" in langs:
         if not any("ruff" in x for x in au["linters"]):
             w.copy("ruff.toml", os.path.join(T, "ruff.toml"))
         w.copy("mypy.ini", os.path.join(T, "mypy.ini"))
     if "javascript" in langs:
         biome = json.load(open(os.path.join(T, "biome.json"), encoding="utf-8"))
-        if any("prettier" in x for x in au["linters"]):
-            biome["formatter"]["enabled"] = False  # the repository's own formatter stays in charge
         if any("eslint" in x or "prettier" in x for x in au["linters"]):
             # house style belongs to the repository's own ESLint config: Biome keeps correctness,
             # suspicious-pattern and security rules, and drops the groups and rules that contradict an

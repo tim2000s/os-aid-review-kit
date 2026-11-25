@@ -1,8 +1,0 @@
---swiftversion 5.9
---indent 4
---maxwidth 140
---importgrouping alpha
---stripunusedargs closure-only
---self remove
---commas inline
---exclude Pods,Carthage,.build,DerivedData
