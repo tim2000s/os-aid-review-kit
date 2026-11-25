@@ -55,8 +55,8 @@ are the exceptions, and are refreshed on each run.
 
 ## Every repository on a machine
 
-`python3 kit/global.py on` points git's global `core.hooksPath` at `global-hooks/`, so the gate runs
-in every repository on the machine without anything being added to them. The dispatcher there runs a
+`python3 kit/global.py on` points git's global `core.hooksPath` at the kit's `global-hooks/`, so the
+gate runs in every repository on the machine without anything being added to them. The dispatcher there runs a
 repository's own hook first (a lefthook or pre-commit install in `.git/hooks`, which git stops
 running once a global hooks path is set), then the gate:
 
@@ -66,9 +66,33 @@ running once a global hooks path is set), then the gate:
 | Anything else | ambient mode: record check and TruffleHog at commit, record check at push | `~/.review-ledger/repos/home/<path>/records/` (or `abs/<drive>/<path>` outside the home folder) |
 | Opted out (`git config review.ambient false`) | the repository's own hooks only | none |
 
+The hooks and the guard run from `~/.review-kit`, a copy of the checkout's last commit, never from
+the checkout itself. An edit to the kit, made by hand or by an assistant, therefore changes nothing
+live until it has been committed through the kit's own gate and a person runs `global.py update`,
+which the guard refuses from an assistant along with any shell write to the copy. `global.py on` and
+`enable.py` make the copy only where there is none, and `global.py status` names the commit it holds.
+The first copy takes the checkout's HEAD as it stands, since there is nothing earlier to judge it
+by; for someone setting the kit up, that is the clone they have just made. Every later copy is an
+`update`, and goes live only when each file changed since the live commit has a valid review record,
+judged by the `review.py` and the tier settings of the live commit, so a commit made with
+`REVIEW_SKIP` cannot go live and neither the working tree nor the new commit can loosen the check.
+`update` runs from the live copy (`python3 ~/.review-kit/kit/global.py update`), so the code doing
+the check is the reviewed code and not the checkout's, and it refuses a commit that does not descend
+from the live one, since going back is a revert to commit and review like any other change. A
+copy that has lost its `DEPLOYED` record is not replaced by `on` or `enable.py`; a person runs
+`update`, or deletes the copy and starts again. Deleting the whole copy with a script, which the
+guard does not inspect, would let the next `on` or `enable.py` copy HEAD unchecked. The guard lets an assistant run
+`global.py` only as `on` or `status`. The
+guard's hook command ends in `|| exit 2`, so a missing copy refuses every assistant call rather than
+letting it through; git, though, runs no hooks from a hooks path that does not exist, so `global.py
+status` is the place to look if the copy has gone. A repository set up with `enable.py` before the
+copy existed keeps the checkout's hooks path until `enable.py` is run in it again.
+This was added on 25 November 2026, after a half-applied edit to the guard in the checkout refused
+every file edit on the machine until it was repaired.
+
 Ambient mode exists for forks of other people's projects, where a `.review/` directory would travel
 into every pull request, and for the many small repositories that would otherwise each need an
-install. In ambient mode, run `python3 ~/os-aid-review-kit/kit/review.py` in place of
+install. In ambient mode, run `python3 ~/.review-kit/kit/review.py` in place of
 `.review/bin/review.py`. The first time it runs in a repository, it copies the matching tier preset to
 `tiers.toml` in that repository's ledger directory, to be edited there. Linters without a configuration
 in the repository use the kit's templates. Each record also notes the checkout path and the origin. The
@@ -131,7 +155,7 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (151
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (179
 tests; the tests for each behaviour were run against a deliberately broken version of it and failed
 there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.

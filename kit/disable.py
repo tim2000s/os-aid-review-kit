@@ -28,7 +28,7 @@ def main(argv=None):
     own = subprocess.run(
         ["git", "-C", top, "config", "--local", "--get", "core.hooksPath"], capture_output=True, text=True
     ).stdout.strip()
-    if own and enable.same_path(own, enable.HOOKS):
+    if enable.hooks.ours(own):
         subprocess.run(["git", "-C", top, "config", "--local", "--unset", "core.hooksPath"], check=True)
     subprocess.run(["git", "-C", top, "config", "--local", "review.ambient", "false"], check=True)
     mode = enable.gate_mode(top)

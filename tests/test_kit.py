@@ -777,6 +777,13 @@ def guard(tool, **tool_input):
     "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: .review/records/a.md\n*** End Patch\nEOF",
     'git commit -m "$(git config core.hooksPath /tmp)"', "cp -t .review/records/ a.md",
     "cp --target-directory=.review/records a.md", "mv a.md .review/records",
+    "python3 ~/os-aid-review-kit/kit/global.py update", "rm -rf ~/.review-kit", "rm -rf ~/.review-ledger",
+    "echo x > ~/.review-kit/kit/guard.py", "rsync -a kit/ ~/.review-kit/kit/", "tar -xf k.tar -C ~/.review-kit",
+    "perl -pi -e s/a/b/ ~/.review-kit/kit/guard.py", "touch ~/.review-kit.new/kit/guard.py", "mkdir ~/.review-kit",
+    "python3 kit/global.py $(echo update)", "a=update; python3 kit/global.py $a",
+    "echo update | xargs python3 kit/global.py", "find ~/.review-kit -name DEPLOYED -delete",
+    "sed --in-place s/a/b/ .review/records/x.md", "python3 -m global off", "tar -xCf ~/.review-kit x.tar",
+    "trash ~/.review-kit", "rmdir ~/.review-kit",
 ])
 def test_guard_refuses_ways_round_the_gate(command):
     assert guard("Bash", command=command) == 2
@@ -792,6 +799,9 @@ def test_guard_refuses_ways_round_the_gate(command):
     "echo 'a; git commit --no-verify' > notes.txt",
     'git commit -m "Set core.hooksPath from global.py"',
     "git commit -F - <<'EOF'\nBlock core.hooksPath and --no-verify\nEOF",
+    "grep -n update kit/global.py", "ls ~/.review-kit", "sh ~/.review-kit/kit/py ~/.review-kit/kit/review.py checks",
+    "tar -cf /tmp/b.tar ~/.review-kit", "python3 kit/global.py status", "python3 kit/global.py on --codex",
+    "git commit -qm x kit/global.py", "cp kit/global.py /tmp/x/",
 ])
 def test_guard_allows_ordinary_work(command):
     assert guard("Bash", command=command) == 0
@@ -841,7 +851,8 @@ def test_global_on_restores_the_executable_bit(tmp_path):
         f.chmod(0o644)  # as an unzip can leave them
     env = {**os.environ, "HOME": str(tmp_path / "home")}
     subprocess.run([PY, str(kit / "kit" / "global.py"), "on"], env=env, check=True, capture_output=True)
-    assert all(os.access(f, os.X_OK) for f in (kit / "global-hooks").iterdir())
+    live = tmp_path / "home" / ".review-kit"
+    assert all(os.access(f, os.X_OK) for f in [*(live / "global-hooks").iterdir(), live / "kit" / "py"])
 
 
 def test_global_hooks_are_plain_files_not_symlinks():
@@ -1169,6 +1180,9 @@ def new_repo(path):
 def two(tmp_path):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
+    for part in ("kit", "global-hooks", "templates"):  # the live copy, made from the code under test
+        shutil.copytree(os.path.join(KIT, part), home / ".review-kit" / part)
+    (home / ".review-kit" / "DEPLOYED").write_text("the working tree under test\n")
     env = {"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home / ".codex")}
     return new_repo(tmp_path / "on"), new_repo(tmp_path / "other"), home, env
 
@@ -1185,8 +1199,8 @@ def test_enable_gates_one_repository_and_commits_nothing(two):
     refused = sh(on, "git", "commit", "-qm", "change", check=False, env=env)
     assert refused.returncode != 0 and "unreviewed: app.py" in refused.stdout + refused.stderr
     sh(other, "git", "commit", "-qm", "change", env=env)  # the other repository is untouched
-    assert sh(on, PY, ENABLE, "--status", check=False).returncode == 0
-    assert sh(other, PY, ENABLE, "--status", check=False).returncode == 1
+    assert sh(on, PY, ENABLE, "--status", check=False, env=env).returncode == 0
+    assert sh(other, PY, ENABLE, "--status", check=False, env=env).returncode == 1
 
 
 def test_disable_turns_one_repository_off_again(two):
@@ -1237,3 +1251,79 @@ def test_guard_refuses_running_disable(command):
 ])
 def test_guard_allows_reading_and_staging_disable(command):
     assert guard("Bash", command=command) == 0
+
+
+# The live copy in ~/.review-kit, which the hooks and the guard run from.
+
+def kit_checkout(path):
+    """A clone of the kit as it is in the working tree, committed and with an upstream, as a person's
+    checkout has, so deploy has a HEAD to copy and a published commit to measure it from."""
+    src = path.parent / (path.name + "-origin")
+    shutil.copytree(KIT, src, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+    sh(src, "git", "init", "-q", "-b", "main")
+    sh(src, "git", "add", "-A")
+    sh(src, "git", "commit", "-qm", "kit", "--no-verify")
+    sh(path.parent, "git", "clone", "-q", str(src), str(path))
+    return path
+
+
+def test_the_live_copy_holds_the_last_commit_and_changes_only_on_update(tmp_path):
+    kit = kit_checkout(tmp_path / "kit")
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home / ".codex")}
+    (kit / "kit" / "review.py").write_text("raise SystemExit(0)\n")  # an uncommitted edit that would pass anything
+    run = [PY, str(kit / "kit" / "global.py")]
+    sh(tmp_path, *run, "on", env=env)
+    live = home / ".review-kit"
+    assert (live / "kit" / "review.py").read_text() == sh(kit, "git", "show", "HEAD:kit/review.py").stdout
+    head = sh(kit, "git", "rev-parse", "HEAD").stdout.strip()
+    assert head in (live / "DEPLOYED").read_text()
+    assert sh(tmp_path, "git", "config", "--global", "core.hooksPath").stdout.strip() == str(live / "global-hooks")
+    sh(kit, "git", "commit", "-qam", "edit", "--no-verify")
+    sh(tmp_path, *run, "on", env=env)
+    assert (live / "kit" / "review.py").read_text() != "raise SystemExit(0)\n", "on does not replace a live copy"
+    from_checkout = sh(tmp_path, *run, "update", env=env, check=False)
+    assert from_checkout.returncode != 0 and "from the live copy" in from_checkout.stderr
+    run_live = [PY, str(live / "kit" / "global.py")]
+    refused = sh(tmp_path, *run_live, "update", env=env, check=False)
+    assert refused.returncode != 0 and "unreviewed: kit/review.py" in refused.stderr, "an unreviewed commit stays out"
+    tiers = kit / ".review" / "tiers.toml"  # loosening the settings on disk does not let it in
+    tiers.write_text(tiers.read_text().replace("[exempt]\npaths = [", '[exempt]\npaths = ["*", '))
+    assert sh(tmp_path, *run_live, "update", env=env, check=False).returncode != 0
+    sh(kit, "git", "checkout", "-q", ".review/tiers.toml")
+    (live / "DEPLOYED").unlink()  # nor does removing the record of what is live
+    assert sh(tmp_path, *run, "on", env=env, check=False).returncode != 0
+    assert (live / "kit" / "review.py").read_text() != "raise SystemExit(0)\n"
+    (live / "DEPLOYED").write_text(f"commit {head} of {kit}: kit\n")
+    blob = sh(kit, "git", "rev-parse", "HEAD:kit/review.py").stdout.strip()
+    rec = {"id": "t", "tier": "high", "author": "a", "reviewer": "r", "explanation": "x", "findings": [],
+           "files": [{"path": "kit/review.py", "blob": blob, "tier": "high", "tier_reason": "matches kit/*"}],
+           "checks": [{"name": "lint (new findings)", "result": "pass"}, {"name": "tests: unit", "result": "pass"}],
+           "human_review": {"status": "pending"}, "way_back": "revert"}
+    (kit / ".review" / "records" / "t.md").write_text("```json\n" + json.dumps(rec) + "\n```\n")
+    sh(kit, "git", "add", "-A")
+    sh(kit, "git", "commit", "-qm", "record", "--no-verify")
+    sh(tmp_path, *run_live, "update", env=env)
+    assert (live / "kit" / "review.py").read_text() == "raise SystemExit(0)\n"
+    sh(kit, "git", "checkout", "-q", "HEAD~2")  # going back is not an update
+    back = sh(tmp_path, *run_live, "update", env=env, check=False)
+    assert back.returncode != 0 and "does not descend" in back.stderr
+
+
+def test_on_moves_an_older_guard_to_the_live_copy_without_adding_instructions(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    old = 'sh "/old/os-aid-review-kit/kit/py" "/old/os-aid-review-kit/kit/guard.py"'
+    settings = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": old}]}]}}
+    (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+    env = {"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home / ".codex")}
+    sh(tmp_path, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))  # as before
+    sh(tmp_path, PY, os.path.join(KIT, "kit", "global.py"), "on", env=env)
+    hooks = json.loads((home / ".claude" / "settings.json").read_text())["hooks"]["PreToolUse"]
+    commands = [h["command"] for g in hooks for h in g["hooks"]]
+    assert commands == [f'sh "{home}/.review-kit/kit/py" "{home}/.review-kit/kit/guard.py" || exit 2']
+    assert not (home / ".claude" / "CLAUDE.md").exists()
+    hooks_path = sh(tmp_path, "git", "config", "--global", "core.hooksPath").stdout.strip()
+    assert hooks_path == str(home / ".review-kit" / "global-hooks")
+    missing = commands[0].replace(str(home / ".review-kit"), str(tmp_path / "gone"))
+    assert subprocess.run(["sh", "-c", missing], input=b"{}", capture_output=True).returncode == 2

@@ -45,8 +45,8 @@ ENV_BLOCK = {
 OFF_VALUES = {"0", "false", "no", "off"}
 GATE_SETTINGS = re.compile(r"core\.hookspath|review\.ambient|review\.upstream", re.I)
 PROTECTED = re.compile(
-    r"(^|/)(\.review/records(/|$)|\.review-ledger/|\.git/hooks/|\.git/config$|\.gitconfig$|"
-    r"lefthook-local\.ya?ml$|\.claude/settings(\.local)?\.json$|"
+    r"(^|/)(\.review/records(/|$)|\.review-ledger(/|$)|\.git/hooks/|\.git/config$|\.gitconfig$|"
+    r"\.review-kit(\.new|\.old)?(/|$)|lefthook-local\.ya?ml$|\.claude/settings(\.local)?\.json$|"
     r"\.codex/(hooks\.json|config\.toml|requirements\.toml)$|\.gemini/settings\.json$)"
 )
 SHELL_TOOLS = {"Bash", "PowerShell", "exec_command", "shell", "local_shell", "run_shell_command"}
@@ -61,9 +61,11 @@ def protected(path):
         return True
     return bool(PROTECTED.search(path))
 # commands that only read or stage a file, so that naming disable.py in them is ordinary kit work
-READERS = {"cat", "less", "head", "tail", "grep", "rg", "ruff", "diff", "wc", "ls", "nl", "stat", "file", "semgrep"}
-GIT_READS = {"add", "rm", "mv", "diff", "show", "log", "status", "blame", "restore", "grep"}
-WRITERS = {"rm", "mv", "cp", "tee", "truncate", "chmod", "ln", "dd", "install", "unlink"}
+READERS = {"cat", "less", "head", "tail", "grep", "rg", "ruff", "diff", "wc", "ls", "nl", "stat", "file", "semgrep",
+           "mypy", "cp"}
+GIT_READS = {"add", "rm", "mv", "diff", "show", "log", "status", "blame", "restore", "grep", "commit"}
+WRITERS = {"rm", "mv", "cp", "tee", "truncate", "chmod", "ln", "dd", "install", "unlink", "touch", "mkdir",
+           "rmdir", "trash", "gio"}
 
 
 def segments(command):
@@ -153,19 +155,22 @@ def check_segment(seg):
     names = [os.path.basename(x) for x in rest]
     # writing to a protected file with a shell command
     targets = re.findall(r">>?\s*(\S+)", seg)
-    if names and names[0] in ("cp", "install", "ln"):
+    if names and names[0] in ("cp", "install", "ln", "rsync", "ditto"):
         # only the destination is written: the last operand, or the directory given with -t
         targets += [x for x in rest[1:] if not x.startswith("-")][-1:]
         targets += [rest[k + 1] for k, x in enumerate(rest[:-1]) if x in ("-t", "--target-directory")]
         targets += [x.split("=", 1)[1] for x in rest if x.startswith("--target-directory=")]
-    elif names and (names[0] in WRITERS or (names[0] == "sed" and any(x.startswith("-i") for x in rest))):
+    elif names and (names[0] == "unzip" or (names[0] == "tar" and any(
+            re.fullmatch(r"-?[A-Za-z]*x[A-Za-z]*", x) or x == "--extract" for x in rest[1:]))):
+        targets += rest[1:]  # an extraction writes where -C or -d points, in whichever flag form
+    elif names and (names[0] in WRITERS or (names[0] in ("sed", "perl") and any(
+            re.match(r"-\w*i|--in-place", x) for x in rest)) or (names[0] == "find" and any(
+            x in ("-delete", "-exec", "-execdir", "-ok") for x in rest))):
         targets += rest[1:]
     if any(protected(t) for t in targets):
         return "writes to a review record, a hook or a setting the gate depends on"
     if "review.py" in names and "signoff" in rest:
         return "enters a human sign-off, which only the person who read the code may do"
-    if "global.py" in names and "off" in rest:
-        return "switches the review gate off for every repository"
     g = rest[names.index("git") + 1 :] if "git" in names else []
     words_ = iter(g)
     sub = ""
@@ -180,6 +185,14 @@ def check_segment(seg):
         first == "git" and sub in GIT_READS)
     if "disable.py" in names and not reads:
         return "switches the review gate off for this repository"
+    module = any(x == "-m" and y == "global" for x, y in zip(rest, rest[1:], strict=False))
+    if ("global.py" in names or module) and not reads:
+        # only the two actions that add or report are the assistant's; off and update are the person's,
+        # and an argument that is not literally one of the two (a variable, $(...), xargs) counts as either
+        at = names.index("global.py") if "global.py" in names else rest.index("-m") + 1
+        after = [x for x in rest[at + 1:] if not x.startswith("-")]
+        if after[:1] not in (["on"], ["status"]):
+            return "runs global.py other than as `on` or `status`; off and update are the person's to run"
     if "git" not in names:
         return None
     if sub == "commit":

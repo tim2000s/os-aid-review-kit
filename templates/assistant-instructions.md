@@ -1,10 +1,10 @@
 <!-- review-kit:start (managed by os-aid-review-kit; edit the kit, not this block) -->
 ## Reviewing code before it is committed
 
-The review gate in `~/os-aid-review-kit` runs in the repositories where it has been turned on, and
-`sh ~/os-aid-review-kit/kit/py ~/os-aid-review-kit/kit/enable.py --status` says whether this is one.
+The review gate in `~/.review-kit` runs in the repositories where it has been turned on, and
+`sh ~/.review-kit/kit/py ~/.review-kit/kit/enable.py --status` says whether this is one.
 Where it is, every commit and push goes through it and the steps below apply. Run its script as
-`sh ~/os-aid-review-kit/kit/py ~/os-aid-review-kit/kit/review.py <command>`, which works on every
+`sh ~/.review-kit/kit/py ~/.review-kit/kit/review.py <command>`, which works on every
 system; in a repository with the kit committed, `.review/bin/review.py` is the same script. When the
 person asks for the gate in a repository, run `enable.py` there and follow what it prints.
 

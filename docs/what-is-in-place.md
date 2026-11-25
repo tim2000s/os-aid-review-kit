@@ -38,7 +38,7 @@ them; this way, those do not block new work, and new findings cannot be passed o
 
 ## Where the gate applies
 
-Git's global `core.hooksPath` points at `~/os-aid-review-kit/global-hooks/`, so every commit and
+Git's global `core.hooksPath` points at `~/.review-kit/global-hooks/`, so every commit and
 push in every repository passes through the kit's dispatcher. The dispatcher first runs whatever
 hook the repository had of its own, and then one of the following.
 
@@ -93,7 +93,7 @@ The commands a person uses:
 | `review.py pr-body --base <branch>` | the pull request description: each record's explanation, checks, findings and way back, any file no record covers, and the blob reviewed for every file with a `git ls-tree` command that confirms it |
 
 In a repository with the kit committed these are run as `python3 .review/bin/review.py`, and
-elsewhere as `python3 ~/os-aid-review-kit/kit/review.py`.
+elsewhere as `python3 ~/.review-kit/kit/review.py`.
 
 ## Tiers
 

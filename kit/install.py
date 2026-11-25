@@ -368,7 +368,8 @@ def main(argv=None):
             hooks_note = f"not installed: the repository already uses {', '.join(other)}; merge lefthook.yml by hand"
         elif os.path.normcase(os.path.abspath(subprocess.run(
                 ["git", "config", "--global", "--get", "core.hooksPath"], capture_output=True, **UTF8
-                ).stdout.strip() or "-")) == os.path.normcase(os.path.join(KIT, "global-hooks")):
+                ).stdout.strip() or "-")) in (os.path.normcase(os.path.join(KIT, "global-hooks")),
+                                              os.path.normcase(os.path.expanduser("~/.review-kit/global-hooks"))):
             # lefthook refuses a global hooks path; the kit's dispatcher runs lefthook itself
             hooks_note = "covered by the kit's global hooks (kit/global.py on)"
         elif lefthook := shutil.which("lefthook"):

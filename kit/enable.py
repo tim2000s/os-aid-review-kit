@@ -26,16 +26,9 @@ sys.path.insert(0, os.path.join(KIT, "kit"))
 import install  # noqa: E402
 import review  # noqa: E402
 
-machine = importlib.import_module("global")  # global.py; `global` is a keyword
+hooks = importlib.import_module("global")  # global.py; `global` is a keyword
 
 UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
-
-
-HOOKS = os.path.join(KIT, "global-hooks")
-
-
-def same_path(a, b):
-    return os.path.normcase(os.path.abspath(os.path.expanduser(a))) == os.path.normcase(os.path.abspath(b))
 
 
 def git(top, *args):
@@ -46,7 +39,7 @@ def gate_mode(directory):
     """How the review gate runs for commits made in `directory`, or None where it does not."""
     top = git(directory, "rev-parse", "--show-toplevel")
     machine = git(directory, "config", "--global", "--get", "core.hooksPath")
-    machine = "the hooks for every repository on this machine" if machine and same_path(machine, HOOKS) else None
+    machine = "the hooks for every repository on this machine" if hooks.ours(machine) else None
     if not top:
         return machine
     if os.path.exists(os.path.join(top, ".review", "bin", "review.py")):
@@ -55,7 +48,7 @@ def gate_mode(directory):
         return None
     local = git(top, "config", "--local", "--get", "core.hooksPath")
     if local:  # a repository's own hooks path replaces the machine's
-        return "this repository's own hooks" if same_path(local, HOOKS) else None
+        return "this repository's own hooks" if hooks.ours(local) else None
     return machine
 
 
@@ -75,22 +68,21 @@ def main(argv=None):
         return 0 if mode else 1
 
     own = git(top, "config", "--local", "--get", "core.hooksPath")
-    if own and not same_path(own, HOOKS):
+    if own and not hooks.ours(own):
         raise SystemExit(
             f"enable: {top} sets its own core.hooksPath ({own}), as husky does, and the kit would "
             "replace it; set the gate up by hand there (see the kit README)"
         )
-    subprocess.run(["git", "-C", top, "config", "--local", "core.hooksPath", HOOKS], check=True)
+    hooks.ensure_live()
+    subprocess.run(["git", "-C", top, "config", "--local", "core.hooksPath", hooks.HOOKS], check=True)
     subprocess.run(["git", "-C", top, "config", "--local", "review.ambient", "true"], check=True)
-    for name in os.listdir(HOOKS):  # a copied or unzipped kit can lose the executable bit
-        os.chmod(os.path.join(HOOKS, name), 0o755)  # noqa: S103 nosemgrep
 
     installed = os.path.exists(os.path.join(top, ".review", "bin", "review.py"))
     if installed:
         tiers, script = os.path.join(top, ".review", "tiers.toml"), ".review/bin/review.py"
     else:
         review.enter_ambient(top)  # copies the matching preset into the ledger the first time
-        tiers, script = os.environ["REVIEW_TIERS"], os.path.join(KIT, "kit", "review.py")
+        tiers, script = os.environ["REVIEW_TIERS"], os.path.join(hooks.RUNTIME, "kit", "review.py")
     with open(tiers, "rb") as f:
         cfg = tomllib.load(f)
     langs = install.audit(top)["languages"]
@@ -99,13 +91,13 @@ def main(argv=None):
     ]
     missing = [t for t in need if not shutil.which(t) and not (t == "detekt" and shutil.which("detekt-cli"))]
     added = []
-    for agent, (settings, *_) in machine.AGENTS.items():
+    for agent, (settings, *_) in hooks.AGENTS.items():
         if os.path.isdir(os.path.dirname(os.path.realpath(settings))):
-            machine.install_guard(agent, True)
-            machine.instructions(agent, True)
-            added.append(machine.NAMES[agent])
+            hooks.install_guard(agent, True)
+            hooks.instructions(agent, True)
+            added.append(hooks.NAMES[agent])
 
-    run = f'sh "{os.path.join(KIT, "kit", "py")}" "{script}"' if not installed else f"python3 {script}"
+    run = f'sh "{os.path.join(hooks.RUNTIME, "kit", "py")}" "{script}"' if not installed else f"python3 {script}"
     print(f"\nThe review gate is on for {top}, set in this repository's own git config; nothing was committed.")
     print(f"Tiers: the {install.detect_preset(top)} settings, in {tiers}.")
     if not cfg.get("tests"):
