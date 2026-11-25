@@ -1044,8 +1044,11 @@ def test_off_leaves_settings_without_the_guard_untouched(tmp_path):
 def test_a_linter_that_prints_nothing_fails_the_gate(repo, tmp_path):
     stub = tmp_path / "bin"
     stub.mkdir()
-    (stub / "ruff").write_text("#!/bin/sh\nexit 0\n")
-    (stub / "ruff").chmod(0o755)
+    if sys.platform == "win32":  # Windows finds a program by its extension, so the stub is a batch file
+        (stub / "ruff.cmd").write_text("@exit /b 0\r\n")
+    else:
+        (stub / "ruff").write_text("#!/bin/sh\nexit 0\n")
+        (stub / "ruff").chmod(0o755)
     stage_change(repo)
     p = sh(repo, PY, ".review/bin/lintgate.py", "--staged", check=False,
            env={"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"})
@@ -1321,9 +1324,10 @@ def test_on_moves_an_older_guard_to_the_live_copy_without_adding_instructions(tm
     sh(tmp_path, PY, os.path.join(KIT, "kit", "global.py"), "on", env=env)
     hooks = json.loads((home / ".claude" / "settings.json").read_text())["hooks"]["PreToolUse"]
     commands = [h["command"] for g in hooks for h in g["hooks"]]
-    assert commands == [f'sh "{home}/.review-kit/kit/py" "{home}/.review-kit/kit/guard.py" || exit 2']
+    live = str(home / ".review-kit").replace("\\", "/")  # the kit writes the command with forward slashes
+    assert commands == [f'sh "{live}/kit/py" "{live}/kit/guard.py" || exit 2']
     assert not (home / ".claude" / "CLAUDE.md").exists()
     hooks_path = sh(tmp_path, "git", "config", "--global", "core.hooksPath").stdout.strip()
     assert hooks_path == str(home / ".review-kit" / "global-hooks")
-    missing = commands[0].replace(str(home / ".review-kit"), str(tmp_path / "gone"))
+    missing = commands[0].replace(live, str(tmp_path / "gone").replace("\\", "/"))
     assert subprocess.run(["sh", "-c", missing], input=b"{}", capture_output=True).returncode == 2
