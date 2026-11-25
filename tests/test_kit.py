@@ -753,7 +753,8 @@ GUARD = os.path.join(KIT, "kit", "guard.py")
 
 
 def guard(tool, **tool_input):
-    event = json.dumps({"tool_name": tool, "tool_input": tool_input})
+    # from the kit's own checkout, which has the kit committed and so is always gated
+    event = json.dumps({"tool_name": tool, "tool_input": tool_input, "cwd": KIT})
     return subprocess.run([PY, GUARD], input=event, capture_output=True, **UTF8).returncode
 
 
@@ -1148,3 +1149,91 @@ def test_pr_body_says_when_a_signoff_was_forced_over_changed_files(repo):
     sh(repo, "git", "commit", "-qam", "signoff", "--no-verify")
     out = review(repo, "pr-body", "--base", base).stdout
     assert "approved by A Person" in out and "differed from the reviewed content: `app.py`" in out
+
+
+# One repository at a time, set up by an assistant: enable.py and disable.py.
+
+ENABLE = os.path.join(KIT, "kit", "enable.py")
+
+
+def new_repo(path):
+    path.mkdir()
+    sh(path, "git", "init", "-q", "-b", "main")
+    (path / "app.py").write_text("import os\n\n\ndef f():\n    return 1\n")
+    sh(path, "git", "add", ".")
+    sh(path, "git", "commit", "-qm", "base")
+    return path
+
+
+@pytest.fixture
+def two(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = {"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home / ".codex")}
+    return new_repo(tmp_path / "on"), new_repo(tmp_path / "other"), home, env
+
+
+def test_enable_gates_one_repository_and_commits_nothing(two):
+    on, other, home, env = two
+    p = sh(on, PY, ENABLE, env=env)
+    assert "The review gate is on" in p.stdout and "Claude Code" in p.stdout and "Tests: none configured" in p.stdout
+    assert sh(on, "git", "status", "--porcelain").stdout == ""
+    assert "guard.py" in (home / ".claude" / "settings.json").read_text()
+    assert "enable.py --status" in (home / ".claude" / "CLAUDE.md").read_text()
+    for r in (on, other):
+        stage_change(r)
+    refused = sh(on, "git", "commit", "-qm", "change", check=False, env=env)
+    assert refused.returncode != 0 and "unreviewed: app.py" in refused.stdout + refused.stderr
+    sh(other, "git", "commit", "-qm", "change", env=env)  # the other repository is untouched
+    assert sh(on, PY, ENABLE, "--status", check=False).returncode == 0
+    assert sh(other, PY, ENABLE, "--status", check=False).returncode == 1
+
+
+def test_disable_turns_one_repository_off_again(two):
+    on, _, _, env = two
+    sh(on, "git", "config", "--global", "core.hooksPath", os.path.join(KIT, "global-hooks"))  # machine-wide too
+    sh(on, PY, ENABLE, env=env)
+    p = sh(on, PY, os.path.join(KIT, "kit", "disable.py"), env=env)
+    assert "review gate: off" in p.stdout
+    stage_change(on)
+    sh(on, "git", "commit", "-qm", "change", env=env)
+
+
+def test_enable_leaves_a_repository_with_its_own_hooks_path_alone(two):
+    on, _, _, env = two
+    sh(on, "git", "config", "core.hooksPath", ".husky")
+    p = sh(on, PY, ENABLE, check=False, env=env)
+    assert p.returncode != 0 and "own core.hooksPath" in p.stderr
+    assert sh(on, "git", "config", "core.hooksPath").stdout.strip() == ".husky"
+
+
+def test_guard_reads_git_dash_c_before_the_subcommand():
+    assert guard("Bash", command="git -C /tmp config --get core.hooksPath") == 0
+    assert guard("Bash", command="git -C /tmp commit -n -m x") == 2
+
+
+def test_a_finding_without_a_summary_is_refused_and_leaves_no_record(plain, tmp_path):
+    stage_change(plain)
+    ambient(plain, "checks")
+    (tmp_path / "exp.txt").write_text("Changes f to return 2.\n")
+    (tmp_path / "f.json").write_text(json.dumps([{"label": "nit", "finding": "x", "disposition": "left"}]))
+    p = ambient(plain, "record", "--author", "a", "--reviewer", "r, fresh context",
+                "--explanation", str(tmp_path / "exp.txt"), "--findings", str(tmp_path / "f.json"))
+    assert p.returncode != 0 and "a summary" in p.stderr and "Traceback" not in p.stderr
+    assert not list((tmp_path / "ledger").rglob("records/*.md"))
+
+
+@pytest.mark.parametrize("command", [
+    "python3 kit/disable.py", "sh ~/os-aid-review-kit/kit/py ~/os-aid-review-kit/kit/disable.py",
+    "exec python3 kit/disable.py .", "git bisect run python3 kit/disable.py", "sed -i '' s/x/y/ kit/disable.py",
+])
+def test_guard_refuses_running_disable(command):
+    assert guard("Bash", command=command) == 2
+
+
+@pytest.mark.parametrize("command", [
+    "git add kit/disable.py", "cat kit/disable.py", "sed -n 1,40p kit/disable.py", "ruff check kit/disable.py",
+    "git diff -- kit/disable.py", "export FOO=1",
+])
+def test_guard_allows_reading_and_staging_disable(command):
+    assert guard("Bash", command=command) == 0

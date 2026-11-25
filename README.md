@@ -11,6 +11,27 @@ maintainer can confirm in minutes: every reviewed file is named by the git blob 
 that was reviewed, so whether the code in a pull request is the code that was reviewed is a lookup
 rather than a judgement.
 
+## Setting it up by asking your assistant
+
+In the repository you are working in, ask Claude Code, Codex or Gemini CLI:
+
+> Set up the OS-AID review kit in this repository: clone https://github.com/tim2000s/os-aid-review-kit
+> to ~/os-aid-review-kit if it isn't there, run `sh ~/os-aid-review-kit/kit/py ~/os-aid-review-kit/kit/enable.py`,
+> and do what it says.
+
+`enable.py` turns the gate on for that repository alone. It sets the repository's own hooks path to
+the kit and commits nothing, so a fork of AndroidAPS or Trio carries no kit files into a pull request.
+It also adds the assistant guard and the review steps to the user settings of each assistant it finds,
+refreshing them on every run. The review steps apply only in repositories where the gate is on; the
+guard refuses ways round the gate in every repository. It then prints, for the assistant, the
+tier settings it chose, any tools still missing with the command that installs them, and the steps
+to follow for every change, ending with the pull request description from `review.py pr-body`. The
+assistant asks before installing anything. `enable.py --status` says whether the gate is on here.
+Turning it off is `kit/disable.py`, which the guard refuses from an assistant, so a person runs it.
+
+The two routes below remain: `install.py` for a repository whose owner commits the kit, and
+`global.py on` for gating every repository on a machine.
+
 ## What it installs
 
 `python3 kit/install.py <repo> [--hooks] [--accept-existing-cves] [--dry-run]` audits the repository
@@ -110,7 +131,7 @@ wiring between them in the high tier for AndroidAPS, Trio and Nightscout.
 
 ## Tests
 
-`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (135
+`pytest -q tests/` builds throwaway repositories, installs the kit and runs the real tools (151
 tests; the tests for each behaviour were run against a deliberately broken version of it and failed
 there). The Semgrep rules have annotated targets in `tests/semgrep_targets/`; run them with
 `semgrep --test` on a directory holding the rule file and the targets together.
@@ -135,7 +156,12 @@ the suite on all three systems with the real tools.
 `global.py on --claude --codex --gemini` adds `kit/guard.py` to each assistant named, as a hook
 that runs before every shell command and file edit, and writes the review steps
 (`templates/assistant-instructions.md`) into the instructions file that assistant reads in every
-project. `off` removes both.
+project. `off` removes both. `enable.py` adds the same two for every assistant it finds installed.
+
+The guard refuses in every repository, gated or not, so an assistant cannot use `--no-verify` in
+unrelated work either; the person can. Relaxing it outside gated repositories was tried on 25
+November 2026 and given up after three review rounds, each of which found a new way for a command to
+reach a gated repository without being seen (a subshell, `chdir`, `env --chdir`, `git bisect run`).
 
 | Assistant | Hook setting | Tools matched | How the guard refuses |
 |---|---|---|---|

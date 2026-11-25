@@ -84,6 +84,9 @@ The commands a person uses:
 
 | Command | What it does |
 |---|---|
+| `enable.py [repo]` | turns the gate on for one repository without committing anything, and prints the next steps for an assistant |
+| `enable.py --status` | whether the gate runs for commits here |
+| `disable.py [repo]` | turns it off again; a person runs it, since the guard refuses it from an assistant |
 | `review.py status` | lists the records awaiting a person, highest tier first, and any file changed since its review |
 | `review.py status --all` | the same across every ambient repository on the machine |
 | `review.py signoff <id> --by <name>` | records the verdict; refused while the file on disk differs from the reviewed one, unless `--force` is given, which writes the difference into the record |

@@ -234,8 +234,9 @@ def invalid(rec, cfg):
     if rec["human_review"].get("status") == "changes-requested":
         return "a human reviewer asked for changes"
     for f in rec["findings"]:
-        if f.get("label") not in ("important", "nit", "pre-existing") or not f.get("disposition"):
-            return f"a finding needs a label (important/nit/pre-existing) and a disposition: {f}"
+        if not isinstance(f, dict) or f.get("label") not in ("important", "nit", "pre-existing") \
+                or not f.get("summary") or not f.get("disposition"):
+            return f"a finding needs a label (important/nit/pre-existing), a summary and a disposition: {f}"
         if f["label"] == "important" and f["disposition"] != "fixed":
             return f"an important finding must be fixed before commit: {f.get('summary')}"
     if not rec["checks"] or not any(c.get("name", "").startswith("lint") for c in rec["checks"]):
@@ -304,8 +305,9 @@ def render(rec):
 def write(rec):
     os.makedirs(RECORDS, exist_ok=True)
     path = os.path.join(RECORDS, f"{rec['id']}.md")
+    text = render(rec)  # before the file is opened, so a failure cannot leave an empty record behind
     with open(path, "w", encoding="utf-8") as f:
-        f.write(render(rec))
+        f.write(text)
     if AMBIENT:
         ledger_commit(path, f"{rec['id']} {rec['human_review']['status']}: {rec.get('repo', '')}")
     return path

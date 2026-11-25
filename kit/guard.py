@@ -13,6 +13,10 @@ may enter. `global.py on --claude --codex --gemini` adds it to each assistant's 
     Codex        PreToolUse; Bash, apply_patch; refuses with a permissionDecision "deny" on stdout
     Gemini CLI   BeforeTool; run_shell_command, write_file, replace; refuses with exit 2 and stderr
 
+`enable.py` installs it too. It refuses in every repository, gated or not: an attempt to read where a
+shell command will run, so as to relax the checks elsewhere, was given up on 25 November 2026 after
+three review rounds each found a new way into a gated repository past it.
+
 Claude Code and Gemini block a call only on exit 2, and Codex only on a deny, so every failure here,
 from bad input to an internal error, is turned into a refusal. The matching is best-effort: a command is split at shell
 separators and read word by word, commit messages and heredoc bodies are left out so that text
@@ -56,6 +60,9 @@ def protected(path):
     if codex_home and re.search(rf"^{re.escape(codex_home)}/(hooks\.json|config\.toml|requirements\.toml)$", path):
         return True
     return bool(PROTECTED.search(path))
+# commands that only read or stage a file, so that naming disable.py in them is ordinary kit work
+READERS = {"cat", "less", "head", "tail", "grep", "rg", "ruff", "diff", "wc", "ls", "nl", "stat", "file", "semgrep"}
+GIT_READS = {"add", "rm", "mv", "diff", "show", "log", "status", "blame", "restore", "grep"}
 WRITERS = {"rm", "mv", "cp", "tee", "truncate", "chmod", "ln", "dd", "install", "unlink"}
 
 
@@ -159,10 +166,22 @@ def check_segment(seg):
         return "enters a human sign-off, which only the person who read the code may do"
     if "global.py" in names and "off" in rest:
         return "switches the review gate off for every repository"
+    g = rest[names.index("git") + 1 :] if "git" in names else []
+    words_ = iter(g)
+    sub = ""
+    for x in words_:
+        if x in ("-C", "-c", "--git-dir", "--work-tree"):
+            next(words_, None)  # their argument is not the subcommand
+        elif not x.startswith("-") and "=" not in x:
+            sub = x
+            break
+    first = names[0] if names else ""
+    reads = first in READERS or (first == "sed" and not any(x.startswith("-i") for x in rest)) or (
+        first == "git" and sub in GIT_READS)
+    if "disable.py" in names and not reads:
+        return "switches the review gate off for this repository"
     if "git" not in names:
         return None
-    g = rest[names.index("git") + 1 :]
-    sub = next((x for x in g if not x.startswith("-") and "=" not in x), "")
     if sub == "commit":
         after = g[g.index("commit") + 1 :]
         kept, skip = [], False
