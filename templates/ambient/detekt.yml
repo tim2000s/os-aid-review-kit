@@ -1,0 +1,22 @@
+# Ambient mode only, for a repository with no detekt configuration of its own. Applied on top of
+# detekt's defaults, with every rule set that judges naming, length, complexity or style switched off,
+# since those encode a house style the repository never chose (PascalCase Compose functions and
+# backtick JUnit names break the default naming rules). What remains looks for likely defects.
+comments:
+  active: false
+complexity:
+  active: false
+naming:
+  active: false
+performance:
+  active: false
+style:
+  active: false
+empty-blocks:
+  EmptyFunctionBlock:
+    ignoreOverridden: true # an empty listener override is an interface's requirement, not a mistake
+exceptions:
+  TooGenericExceptionCaught:
+    active: false # catching Exception around a parse is a choice the repository makes
+  SwallowedException:
+    active: false

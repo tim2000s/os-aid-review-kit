@@ -1,0 +1,19 @@
+# Ambient mode only, for a repository with no SwiftLint configuration of its own: the rules that look
+# for likely defects, and none of the length, naming or style rules a repository may not have chosen.
+only_rules:
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - weak_delegate
+  - unowned_variable_capture
+  - discarded_notification_center_observer
+  - unhandled_throwing_task
+  - duplicate_enum_cases
+  - duplicated_key_in_dictionary_literal
+  - self_in_property_initialization
+excluded:
+  - Pods
+  - Carthage
+  - .build
+  - DerivedData

@@ -109,11 +109,11 @@ Review-Ledger: ~/.review-ledger</div></li>
 <div class="table-wrap"><table>
   <thead><tr><th>Tool</th><th>What it looks for</th><th>When it runs</th></tr></thead>
   <tbody>
-    <tr><td>Ruff 0.17.3</td><td>Python: likely bugs and unused code, and functions with a cyclomatic complexity above 10 or more than 50 statements. Where the kit is committed to a project it also flags insecure calls, such as <code>eval</code> or a shell command built from a string.</td><td>Checks; pull requests</td></tr>
+    <tr><td>Ruff 0.17.3</td><td>Python: likely bugs and unused code. Where the kit is committed to a project it also flags functions with a cyclomatic complexity above 10 or more than 50 statements, and insecure calls, such as <code>eval</code> or a shell command built from a string.</td><td>Checks; pull requests</td></tr>
     <tr><td>Biome 2.6.8</td><td>JavaScript and TypeScript: likely bugs and suspicious patterns. It has no size or complexity rule.</td><td>Checks; pull requests</td></tr>
-    <tr><td>ktlint 1.8.0</td><td>Kotlin: layout and naming against the standard Kotlin style. Runs on Java.</td><td>Checks; pull requests</td></tr>
-    <tr><td>detekt 1.23.8</td><td>Kotlin: methods of 50 lines or more, cyclomatic complexity of 12 or more, 7 or more parameters, blocks nested 4 or more deep, and swallowed exceptions. Runs on Java.</td><td>Checks; pull requests</td></tr>
-    <tr><td>SwiftLint 0.65.1</td><td>Swift: function bodies longer than 60 lines or with a cyclomatic complexity above 12. Force unwraps and force casts are errors, since one that fails at run time stops the loop.</td><td>Checks; pull requests</td></tr>
+    <tr><td>ktlint 1.8.0</td><td>Kotlin: layout and naming, only where the project has set ktlint up in its .editorconfig or Gradle build. Runs on Java.</td><td>Checks; pull requests</td></tr>
+    <tr><td>detekt 1.23.8</td><td>Kotlin: likely bugs. Where the kit is committed to a project it also flags methods of 50 lines or more, cyclomatic complexity of 12 or more, 7 or more parameters, blocks nested 4 or more deep, and swallowed exceptions. Runs on Java.</td><td>Checks; pull requests</td></tr>
+    <tr><td>SwiftLint 0.65.1</td><td>Swift: likely bugs. Where the kit is committed to a project it also flags function bodies longer than 60 lines or with a cyclomatic complexity above 12. Force unwraps and force casts are errors, since one that fails at run time stops the loop.</td><td>Checks; pull requests</td></tr>
     <tr><td>mypy 2.4.1</td><td>Python type errors in the files a pull request changes. Advisory: it warns and does not fail.</td><td>Pull requests</td></tr>
     <tr><td>TruffleHog 3.100.0</td><td>Secrets, meaning credentials such as API keys and private keys. The kit adds detectors for Nightscout access tokens and API secrets, which the built-in detectors miss because Nightscout has no public endpoint to verify them against.</td><td>Checks; every commit; pull requests</td></tr>
     <tr><td>Semgrep 1.186.0</td><td>Eleven rules written for this kind of code: plain-http URLs, hard-coded URLs and IP addresses, SQL built from strings (in Python, JavaScript, Kotlin and Swift), empty catch blocks, unfinished stubs, Nightscout secrets in source, and inline mmol/L conversion factors. Pushes and pull requests also run Semgrep's public default rule set, counting only new findings.</td><td>Checks; commits, pushes and pull requests where the kit is committed to the project</td></tr>
@@ -148,7 +148,7 @@ Review-Ledger: ~/.review-ledger</div></li>
 </table></div>
 
 <h2>Code quality and over-long code</h2>
-<p>Model-written code tends to be longer than the task needs. The kit treats this in two ways. Automatically, detekt, SwiftLint and Ruff flag functions that are too long or too complex, as listed above; these settings apply where a project has no linter configuration of its own, and a project's own rules take precedence. JavaScript has no automatic size check.</p>
+<p>Model-written code tends to be longer than the task needs. The kit treats this in two ways. Automatically, where the kit is committed to a project, detekt, SwiftLint and Ruff flag functions that are too long or too complex, as listed above, and a project's own rules take precedence. In a project the kit only watches (ambient mode), a linter the project has not set up checks for likely bugs only, since length, naming and style rules belong to a house style the project never chose. JavaScript has no automatic size check.</p>
 <p>A linter can count lines and branches, but it cannot tell whether code was needed. That judgement is given to the second-model review, which is told to treat an oversized change as an important finding to be fixed before commit. Its instructions name four forms: an abstraction or option nobody asked for, a rewrite of a helper the project already has, dead or speculative code, and handling for cases that cannot happen.</p>
 
 <h2>A guard against skipping the checks</h2>

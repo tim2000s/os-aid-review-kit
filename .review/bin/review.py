@@ -115,7 +115,7 @@ def enter_ambient(toplevel):
             dst.write(f"# Ambient-mode tiers for {toplevel}, copied from the kit's preset; edit freely.\n" + src.read())
     # lintgate reads the exempt list from here, and lints with the kit's configs where the repo has none
     os.environ["REVIEW_TIERS"] = tiers
-    os.environ["REVIEW_CONFIG_FALLBACK"] = os.path.join(KIT, "templates")
+    os.environ["REVIEW_CONFIG_FALLBACK"] = os.path.join(KIT, "templates", "ambient")
 
 
 def ledger_commit(path, message):

@@ -892,29 +892,38 @@ def test_sarif_paths_are_cut_at_the_root_whatever_the_separator():
     assert f["path"] == "src/a b.py" and f["line"] == 3 and g["path"] == "src/c.py"
 
 
-def test_ambient_python_gets_complexity_rules_only_without_its_own_ruff_config(plain):
+def test_ambient_mode_judges_no_style_the_repository_did_not_choose(plain):
+    # Boost-autoconfig-rerun, 25 November 2026: the kit's own detekt rules gave 25 new findings, none a
+    # defect: PascalCase Compose functions, backtick JUnit names, long Compose screens
     branchy = "def f(x):\n" + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(12)) + "    return -1\n"
     (plain / "branchy.py").write_text(branchy)
-    sh(plain, "git", "add", "branchy.py")
+    files = ["branchy.py"]
+    if shutil.which("detekt"):
+        body = "".join(f"    if (x == {i}) return {i}\n" for i in range(60))
+        (plain / "Screen.kt").write_text(f"fun MyScreen(x: Int): Int {{\n{body}    return -1\n}}\n\n"
+                                         "class T {\n    fun `adds two`() = 1\n}\n")
+        files.append("Screen.kt")
+    sh(plain, "git", "add", *files)
+    p = ambient(plain, "checks")
+    assert "pass     lint (new findings)" in p.stdout, p.stdout
+
+
+@pytest.mark.skipif(shutil.which("detekt") is None, reason="detekt not installed")
+def test_ambient_fallback_does_not_hide_a_detekt_config_kept_under_config(plain):
+    (plain / "config" / "detekt").mkdir(parents=True)
+    (plain / "config" / "detekt" / "detekt.yml").write_text("naming:\n  active: true\n")
+    (plain / "Screen.kt").write_text("fun MyScreen() = 1\n")
+    sh(plain, "git", "add", ".")
     p = ambient(plain, "checks")
     assert "fail     lint (new findings)" in p.stdout, p.stdout
-    (plain / "pyproject.toml").write_text('[tool.ruff.lint]\nselect = ["F"]\n')
-    sh(plain, "git", "add", "pyproject.toml")
-    p = ambient(plain, "checks")
-    assert "pass     lint (new findings)" in p.stdout, p.stdout
 
 
-def test_removing_a_ruff_config_does_not_make_inherited_complexity_new(plain):
-    branchy = "def f(x):\n" + "".join(f"    if x == {i}:\n        return {i}\n" for i in range(12)) + "    return -1\n"
-    (plain / "branchy.py").write_text(branchy)
-    (plain / "pyproject.toml").write_text('[tool.ruff.lint]\nselect = ["F"]\n')
-    sh(plain, "git", "add", ".")
-    sh(plain, "git", "commit", "-qm", "own ruff config", "--no-verify")
-    (plain / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    (plain / "branchy.py").write_text(branchy.replace("return -1", "return -2"))
-    sh(plain, "git", "add", ".")
+@pytest.mark.skipif(shutil.which("detekt") is None, reason="detekt not installed")
+def test_ambient_mode_still_finds_likely_defects_in_kotlin(plain):
+    (plain / "Key.kt").write_text("class Key(val v: Int) {\n    override fun equals(other: Any?) = other is Key\n}\n")
+    sh(plain, "git", "add", "Key.kt")
     p = ambient(plain, "checks")
-    assert "pass     lint (new findings)" in p.stdout, p.stdout
+    assert "fail     lint (new findings)" in p.stdout, p.stdout
 
 
 def test_trailers_keep_a_non_ascii_commit_message_intact(repo):

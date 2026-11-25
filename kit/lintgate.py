@@ -36,8 +36,9 @@ UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
 CONFIG_FILES = ["pyproject.toml", "ruff.toml", ".ruff.toml", "biome.json", "biome.jsonc",
                 "detekt.yml", "config/detekt/detekt.yml", ".editorconfig", ".swiftlint.yml", ".gitignore"]
 DETEKT_CONFIGS = ("detekt.yml", "config/detekt/detekt.yml")
-# linters that are skipped without a config; ambient mode supplies the kit's
-FALLBACK_CONFIGS = ("biome.json", "detekt.yml", ".swiftlint.yml")
+# linters that are skipped without a config; ambient mode supplies the kit's, with defect rules only
+FALLBACK_CONFIGS = {"biome.json": ("biome.json", "biome.jsonc"), "detekt.yml": DETEKT_CONFIGS,
+                    ".swiftlint.yml": (".swiftlint.yml",)}  # each with every file the linter would read instead
 
 
 class LinterFailed(Exception):
@@ -97,7 +98,7 @@ def swiftlint(files, root):
 # language -> (extensions, [(linter name, lint function, config needed in the tree or None)])
 LANGUAGES = {
     "python": ((".py",), [("ruff", ruff, None)]),
-    "javascript": ((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"), [("biome", biome, "biome.json")]),
+    "javascript": ((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"), [("biome", biome, ("biome.json", "biome.jsonc"))]),
     "kotlin": ((".kt", ".kts"), [("ktlint", ktlint, None), ("detekt", detekt, DETEKT_CONFIGS)]),
     "swift": ((".swift",), [("swiftlint", swiftlint, ".swiftlint.yml")]),
 }
@@ -192,9 +193,9 @@ def materialise(root, spec, paths, fallback=None):
         content = show(spec, path)
         if content is None and fallback is not None and path in CONFIG_FILES:
             content = show(fallback, path)
-        if content is None and path in FALLBACK_CONFIGS and os.environ.get("REVIEW_CONFIG_FALLBACK"):
-            # ambient mode: a repository with no config for this linter is linted with the kit's own
-            # shortcut: no ESLint tailoring here, so new JS files in an ES5 repo meet Biome's style rules
+        if content is None and path in FALLBACK_CONFIGS and os.environ.get("REVIEW_CONFIG_FALLBACK") and not any(
+                show(s, own) is not None for s in (spec, fallback) if s is not None for own in FALLBACK_CONFIGS[path]):
+            # ambient mode: a repository with no config for this linter gets the kit's defect rules only
             src = os.path.join(os.environ["REVIEW_CONFIG_FALLBACK"], path)
             content = open(src, "rb").read() if os.path.exists(src) else None
         if content is None:
@@ -205,25 +206,6 @@ def materialise(root, spec, paths, fallback=None):
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "wb") as f:
             f.write(content)
-
-
-def ruff_fallback(*roots):
-    """Ambient mode only: give Ruff the kit's complexity and length rules where the repository has no
-    Ruff configuration on either side of the change. Never where it has one, since a ruff.toml would
-    take precedence over the repository's own [tool.ruff] table, and on both sides or neither, so that
-    removing a configuration does not turn every inherited complex function into a new finding."""
-    src = os.environ.get("REVIEW_CONFIG_FALLBACK")
-
-    def has_config(root):
-        if any(os.path.exists(os.path.join(root, n)) for n in ("ruff.toml", ".ruff.toml")):
-            return True
-        pyproject = os.path.join(root, "pyproject.toml")
-        return os.path.exists(pyproject) and "[tool.ruff" in open(pyproject, encoding="utf-8", errors="replace").read()
-
-    if not src or any(has_config(r) for r in roots):
-        return
-    for r in roots:
-        shutil.copy(os.path.join(src, "ruff-ambient.toml"), os.path.join(r, "ruff.toml"))
 
 
 def lint_tree(root, paths, skip=()):
@@ -307,7 +289,6 @@ def main(argv=None):
         with tempfile.TemporaryDirectory() as after_root, tempfile.TemporaryDirectory() as before_root:
             materialise(after_root, new_spec, paths, fallback=old_spec)
             materialise(before_root, old_spec, olds, fallback=new_spec)
-            ruff_fallback(after_root, before_root)
             after = lint_tree(after_root, paths, skip)
             before = lint_tree(before_root, olds, skip)
     except LinterFailed as e:

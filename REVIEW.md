@@ -20,3 +20,7 @@ Concerns that recur in this kit. Label findings important, nit or pre-existing.
   `test_ktlint_runs_only_where_the_repository_set_ktlint_up` now catches the first. The kit no longer
   formats anything, since rewriting a file nobody asked to have rewritten changes what was reviewed;
   `test_checks_leave_the_staged_files_as_they_were` catches that returning.
+- Ambient mode applies defect rules only. On 25 November 2026 the kit's full detekt rules, supplied as
+  the fallback for a repository with none of its own, gave 25 new findings on Boost-autoconfig-rerun,
+  none a defect. `test_ambient_mode_judges_no_style_the_repository_did_not_choose` catches that, and
+  `test_ambient_mode_still_finds_likely_defects_in_kotlin` that the fallback still finds something.

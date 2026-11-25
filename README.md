@@ -218,10 +218,13 @@ writes most of the code.
 
 ## Size and complexity
 
-Model-written code tends to run long. detekt and SwiftLint check method length and complexity from
-their templates, and the Ruff template adds C90 (complexity above 10) and PLR0915 (too many
-statements). In ambient mode a Python repository with no Ruff configuration of its own is linted with
-`templates/ruff-ambient.toml`, Ruff's defaults plus those two rules. Linters measure size, not need,
+Model-written code tends to run long. Where the kit is installed, detekt and SwiftLint check method
+length and complexity from their templates, and the Ruff template adds C90 (complexity above 10) and
+PLR0915 (too many statements). Ambient mode does not: a repository with no configuration of its own
+for a linter gets the kit's defect rules only (`templates/ambient/`), and Ruff its defaults, since
+length, naming and style rules encode a house style the repository never chose. On 25 November 2026
+the kit's full rules gave 25 new findings on a fork of AndroidAPS, none of them a defect, among them
+PascalCase Compose functions, backtick JUnit test names and long Compose screens. Linters measure size, not need,
 so the review instructions in the AGENTS block and the default REVIEW.md make an oversized change an
 important finding: an unrequested abstraction, a reimplemented helper, dead or speculative code, or
 handling for cases that cannot occur.
