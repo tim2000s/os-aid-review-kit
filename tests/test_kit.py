@@ -1224,6 +1224,16 @@ def test_enable_leaves_a_repository_with_its_own_hooks_path_alone(two):
     assert sh(on, "git", "config", "core.hooksPath").stdout.strip() == ".husky"
 
 
+@pytest.mark.parametrize("command,code", [
+    ("git rm .review/records/20261120-1.md", 2), ("git -C ~/.review-ledger rm repos/home/x/records/a.md", 2),
+    ("git rm --cached -q .review/records/a.md", 2), ("git mv .review/records/a.md b.md", 2),
+    ("git --work-tree=~/.review-ledger rm a.md", 2),
+    ("git --work-tree=x rm app.py", 0), ("git rm app.py", 0), ("git mv a.py b.py", 0), ("git add .review/records", 0),
+])
+def test_guard_refuses_git_rm_and_mv_on_records(command, code):
+    assert guard("Bash", command=command) == code
+
+
 def test_guard_reads_git_dash_c_before_the_subcommand():
     assert guard("Bash", command="git -C /tmp config --get core.hooksPath") == 0
     assert guard("Bash", command="git -C /tmp commit -n -m x") == 2

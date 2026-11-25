@@ -180,6 +180,14 @@ def check_segment(seg):
         elif not x.startswith("-") and "=" not in x:
             sub = x
             break
+    if sub in ("rm", "mv"):
+        # git rm and git mv change files as rm and mv do; -C and --work-tree name the directory they are in
+        base = [y for x, y in zip(g, g[1:], strict=False) if x in ("-C", "--work-tree")]
+        base += [x.split("=", 1)[1] for x in g if x.startswith("--work-tree=")]
+        files = [x for x in g[g.index(sub) + 1:] if not x.startswith("-")]
+        # shortcut: a relative path after a separate cd into the ledger is not seen; read the hook's cwd if needed
+        if any(protected(f) or any(protected(os.path.join(d, f)) for d in base) for f in files):
+            return "removes or moves a review record by hand; records change only through review.py"
     first = names[0] if names else ""
     reads = first in READERS or (first == "sed" and not any(x.startswith("-i") for x in rest)) or (
         first == "git" and sub in GIT_READS)
